@@ -1,10 +1,10 @@
 [package]
 name = "Shard"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+version = "0.2.0"
+description = "An AI Research Companion Built on Rust & Tauri"
+authors = ["oupadhyay"]
+license = "MIT"
+repository = "oupadhyay/Shard"
 edition = "2021"
 rust-version = "1.77.2"
 

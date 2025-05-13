@@ -207,7 +207,7 @@ body {
 
 #message-input {
   flex-grow: 1;
-  padding: 0;
+  padding: 10px 10px 10px 0; /* Adjust padding */
   background-color: transparent; /* Make input transparent */
   border: none;
   color: rgba(255, 255, 255, 0.9);
@@ -215,8 +215,10 @@ body {
   outline: none; /* Remove focus outline */
   /* Textarea specific styles */
   resize: none; /* Disable manual resize handle */
-  overflow-y: auto; /* Hide scrollbar, rely on JS for height */
+  overflow-y: hidden; /* Hide scrollbar, rely on JS for height */
   line-height: 1.4; /* Match body line-height */
+  min-height: calc(1em * 1.4); /* Start at single line height */
+  font-family: inherit; /* Ensure font matches */
   white-space: pre-wrap; /* Respect newlines and wrap */
   word-wrap: break-word; /* Break long words */
 }
@@ -236,15 +238,50 @@ body {
   color: rgba(255, 255, 255, 0.9);
   font-size: 13px; /* Smaller font size for settings */
   padding-top: 10px; /* Add some padding at the top when reversed */
+  opacity: 0; /* Start fully transparent for fade-in */
+  transition: opacity 0.3s ease-in-out; /* Transition for opacity */
+}
+
+/* Class to trigger fade-in */
+#settings-panel.fade-in-settings {
+  opacity: 1;
+}
+
+/* Close Button Styles */
+#settings-close {
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+  transition: all 0.2s ease;
+}
+
+#settings-close:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+#settings-close:active {
+  transform: scale(0.95);
 }
 
 #settings-content h2 {
   margin-top: 0;
-  margin-bottom: 15px;
   color: white;
   font-weight: 500;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 10px;
+  padding-bottom: 5px;
   font-size: 1.2em; /* Adjust header size relative to panel font-size */
 }
 
@@ -255,51 +292,76 @@ body {
  color: rgba(255, 255, 255, 0.7);
 }
 
+/* Updated API Key Input Group Styles */
 .api-key-controls {
   display: flex;
-  gap: 10px;
-  align-items: center;
+  align-items: stretch;
   margin-bottom: 15px;
 }
 
-#settings-panel input[type="password"] {
-  flex-grow: 1;
+#settings-panel input[type="password"]#api-key-input,
+#settings-panel input[type="password"]#gemini-api-key-input {
+  width: 100%;
   padding: 10px 15px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background-color: rgba(0, 0, 0, 0.3);
   color: white;
-  font-size: 1em; /* Adjust input size relative to panel font-size */
-  /* Make input take full width if button is below */
-  width: 100%;
+  font-size: 1em;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-/* Style for the save button when it's below the input */
-#settings-panel button.save-button-below {
-  display: block; /* Make it a block element */
-  width: calc(100% - 20px);    /* Make it full width */
-  padding: 8px 0px; /* Adjust padding */
-  margin-top: 5px; /* Add some space above it */
-  margin: 5px 10px;
-  border-radius: 8px;
-  border: none;
-  background-color: #007aff;
-  color: white;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  font-weight: 500;
-  text-align: center;
-  font-size: 1em; /* Adjust button size relative to panel font-size */
-}
-
-#settings-panel button.save-button-below:hover {
-  background-color: #0056b3;
+#settings-panel input[type="password"]#api-key-input:focus,
+#settings-panel input[type="password"]#gemini-api-key-input:focus {
+  border-color: #007aff;
+  box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
 }
 
 #settings-status {
   font-size: 0.9em; /* Adjust status size relative to panel font-size */
   color: #cccccc;
   min-height: 1.5em; /* Reserve space */
+  margin-top: 5px; /* Add some space below the input group */
+}
+
+/* Styled Select Dropdown for Model Selection */
+#settings-panel .model-select-container { /* Optional: if you wrap select and label */
+  margin-bottom: 0px;
+}
+
+#settings-panel label[for="model-select"] {
+  display: block;
+  margin-bottom: 8px; /* Increased margin */
+  font-size: 1em;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+#settings-panel #model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  display: block;
+  width: 100%;
+  padding: 10px 35px 10px 15px; /* Right padding for arrow */
+  font-size: 1em;
+  font-weight: 400;
+  line-height: 1.4;
+  color: white;
+  background-color: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="%23FFFFFF"><path d="M8 11.207l-4.604-4.603.707-.707L8 9.793l3.9-3.9.707.707z"/></svg>');
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px 16px;
+  cursor: pointer;
+  outline: none;
+}
+
+#settings-panel #model-select:focus {
+  border-color: #007aff; /* Highlight on focus */
+  box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25); /* Optional focus shadow */
 }
 
 /* Styles for the Tool Buttons Area (Placeholder) */
@@ -537,4 +599,55 @@ body {
     font-family: inherit; /* Ensure font matches */
     white-space: pre-wrap; /* Respect newlines and wrap */
     word-wrap: break-word; /* Break long words */
+}
+
+/* --- Fade Animations for Window Toggle --- */
+body.fade-in {
+  opacity: 1 !important; /* Important to override inline style of opacity 0 */
+  transition: opacity 200ms ease-in-out;
+}
+
+body.fade-out {
+  opacity: 0 !important;
+  transition: opacity 200ms ease-in-out;
+}
+
+#settings-panel .setting-item {
+  margin-top: 5px;
+}
+
+/* Container for heading and status icon */
+.heading-with-status {
+  display: flex;
+  align-items: center;
+  gap: 0px; /* Space between heading and icon */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Styling for the status icon (checkmark) */
+.status-icon-text {
+  padding-right: 5px;
+  font-size: 0.8em;
+  color: #c7c7c7;
+}
+
+#api-key-status-icon {
+  position: absolute;
+  top: 10px;
+  right: 55px;
+  width: 54px;
+  height: 24px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  font-size: 1em; /* Adjust size as needed */
+  color: #c7c7c7;
+  background-color: transparent;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+}
+
+#api-key-status-icon.visible {
+  opacity: 1;
 }

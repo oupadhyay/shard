@@ -9,10 +9,21 @@
     "core:path:default",
     "core:event:default",
     "core:window:default",
+    "core:window:allow-get-all-windows",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-position",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-focus",
+    "core:window:allow-outer-size",
+    "core:window:allow-current-monitor",
     "core:app:default",
     "core:resources:default",
     "core:menu:default",
     "core:tray:default",
-    "log:default"
+    "log:default",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
   ]
 }

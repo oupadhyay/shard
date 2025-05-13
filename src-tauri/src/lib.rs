@@ -1,24 +1,27 @@
-use serde::{Deserialize, Serialize};
-use reqwest;
-use tauri::{AppHandle, Manager};
-use std::fs;
-use std::path::PathBuf;
-use serde_json;
-use tauri::PhysicalPosition;
-use image::{DynamicImage, ImageFormat};
-use std::env; // For temp_dir
-use uuid::Uuid; // For unique filenames
-use tesseract;   // Uncommented
-use std::process::Command;
 use base64::{engine::general_purpose, Engine as _}; // Added base64 import
-use std::io::Cursor; // Added for base64 encoding
+use image::{DynamicImage, ImageFormat};
+use reqwest;
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::env; // For temp_dir
+use std::fs;
+use std::io::Cursor;
+use std::path::PathBuf;
+use std::process::Command;
+use tauri::PhysicalPosition;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent}; // Added Emitter
+use tauri_plugin_global_shortcut::{
+    self as tauri_gs, GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState,
+};
+use tesseract; // Uncommented
+use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
-use std::time::Duration;
-#[cfg(target_os = "windows")]
 use std::thread;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 
 // Default model if none is selected
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
@@ -28,6 +31,7 @@ const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 struct AppConfig {
     api_key: Option<String>,
     selected_model: Option<String>,
+    gemini_api_key: Option<String>, // Added for Gemini
 }
 
 const CONFIG_FILENAME: &str = "config.toml";
@@ -52,14 +56,16 @@ fn get_config_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
 fn load_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
     let config_path = get_config_path(app_handle)?;
     if !config_path.exists() {
-        log::info!("Config file not found at {:?}, returning default.", config_path);
+        log::info!(
+            "Config file not found at {:?}, returning default.",
+            config_path
+        );
         return Ok(AppConfig::default());
     }
     log::info!("Loading config from {:?}", config_path);
     let content = fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config file: {}", e))?;
-    toml::from_str(&content)
-        .map_err(|e| format!("Failed to parse config file: {}", e))
+    toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
 }
 
 fn save_config(app_handle: &AppHandle, config: &AppConfig) -> Result<(), String> {
@@ -72,10 +78,9 @@ fn save_config(app_handle: &AppHandle, config: &AppConfig) -> Result<(), String>
             log::info!("Created config directory: {:?}", parent_dir);
         }
     }
-    let toml_string = toml::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    fs::write(&config_path, toml_string)
-        .map_err(|e| format!("Failed to write config file: {}", e))
+    let toml_string =
+        toml::to_string_pretty(config).map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, toml_string).map_err(|e| format!("Failed to write config file: {}", e))
 }
 
 // Request Structures
@@ -115,6 +120,37 @@ struct ChatCompletionResponse {
     choices: Vec<Choice>,
 }
 
+// --- Gemini API Structures ---
+#[derive(Serialize, Deserialize, Debug)] // Deserialize needed for Candidate's content
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)] // Deserialize needed for Candidate's content
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+    role: Option<String>, // Optional: "user" or "model"
+}
+
+#[derive(Serialize, Debug)]
+struct GeminiChatCompletionRequest {
+    contents: Vec<GeminiContent>,
+    // generation_config: Option<serde_json::Value>, // For more control
+    // safety_settings: Option<serde_json::Value>,   // For safety settings
+}
+
+#[derive(Deserialize, Debug)]
+struct GeminiCandidate {
+    content: GeminiContent,
+    // finish_reason: Option<String>,
+    // safety_ratings: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GeminiChatCompletionResponse {
+    candidates: Vec<GeminiCandidate>,
+    // prompt_feedback: Option<serde_json::Value>,
+}
 
 // --- Screen Capture & OCR Helper Functions ---
 // Uncommented and kept as is
@@ -122,20 +158,26 @@ fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result
     log::info!("Starting OCR process with tesseract crate for an image buffer.");
     let temp_dir_result = app_handle.path().app_cache_dir();
     let temp_dir = temp_dir_result.map_err(|e| {
-       log::error!("Failed to get app cache directory: {}", e);
-       format!("Failed to get app cache directory: {}", e)
+        log::error!("Failed to get app cache directory: {}", e);
+        format!("Failed to get app cache directory: {}", e)
     })?;
     if !temp_dir.exists() {
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create cache directory: {}", e))?;
+        fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
     }
     let temp_filename = format!("{}.png", Uuid::new_v4().to_string());
     let temp_file_path = temp_dir.join(&temp_filename);
 
-    log::info!("Saving image to temporary file for OCR: {:?}", temp_file_path);
-    img_buffer.save_with_format(&temp_file_path, ImageFormat::Png).map_err(|e| {
-        log::error!("Failed to save image to temp file: {}", e);
-        format!("Failed to save image to temp file: {}", e)
-    })?;
+    log::info!(
+        "Saving image to temporary file for OCR: {:?}",
+        temp_file_path
+    );
+    img_buffer
+        .save_with_format(&temp_file_path, ImageFormat::Png)
+        .map_err(|e| {
+            log::error!("Failed to save image to temp file: {}", e);
+            format!("Failed to save image to temp file: {}", e)
+        })?;
 
     let ocr_text_result = || -> Result<String, String> {
         tesseract::Tesseract::new(None, Some("eng")).map_err(|e| {
@@ -158,17 +200,24 @@ fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result
 
     // Cleanup of the temporary file saved by ocr_image_buffer
     if let Err(e) = fs::remove_file(&temp_file_path) {
-        log::warn!("Failed to remove temporary OCR file {:?}: {}", temp_file_path, e);
+        log::warn!(
+            "Failed to remove temporary OCR file {:?}: {}",
+            temp_file_path,
+            e
+        );
     } else {
         log::info!("Temporary OCR file removed: {:?}", temp_file_path);
     }
 
     match ocr_text_result {
         Ok(text) => {
-            log::info!("OCR successful. Text found (first 150 chars): {:.150}", text.replace("\n", " "));
+            log::info!(
+                "OCR successful. Text found (first 150 chars): {:.150}",
+                text.replace("\n", " ")
+            );
             Ok(text)
         }
-        Err(e) => Err(e)
+        Err(e) => Err(e),
     }
 }
 
@@ -199,11 +248,15 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
         }
         if !temp_image_path.exists() {
             // This can happen if the user cancels the selection (e.g., presses Esc)
-            let err_msg = "Interactive screenshot cancelled by user (no image file created).".to_string();
+            let err_msg =
+                "Interactive screenshot cancelled by user (no image file created).".to_string();
             log::info!("{}", err_msg);
             return Err(err_msg);
         }
-        log::info!("Screenshot saved via screencapture to: {:?}", temp_image_path);
+        log::info!(
+            "Screenshot saved via screencapture to: {:?}",
+            temp_image_path
+        );
         successful_capture = true; // Mark capture as successful
     }
 
@@ -228,9 +281,12 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
                 match child.try_wait() {
                     Ok(Some(status)) => log::info!("Snipping Tool exited with: {}", status),
                     Ok(None) => {
-                        log::info!("Snipping Tool still running, user is likely selecting. Polling...");
+                        log::info!(
+                            "Snipping Tool still running, user is likely selecting. Polling..."
+                        );
                         // Poll for a few seconds for the process to exit
-                        for _ in 0..20 { // Poll for up to 10 seconds (20 * 500ms)
+                        for _ in 0..20 {
+                            // Poll for up to 10 seconds (20 * 500ms)
                             thread::sleep(Duration::from_millis(500));
                             if let Ok(Some(status)) = child.try_wait() {
                                 log::info!("Snipping Tool exited with: {}", status);
@@ -247,7 +303,10 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
                 }
             }
             Err(e) => {
-                let err_msg = format!("Failed to start snippingtool.exe: {}. Make sure it is available.", e);
+                let err_msg = format!(
+                    "Failed to start snippingtool.exe: {}. Make sure it is available.",
+                    e
+                );
                 log::error!("{}", err_msg);
                 return Err(err_msg);
             }
@@ -255,21 +314,30 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
 
         // Try to get image from clipboard
         log::info!("Attempting to retrieve image from clipboard...");
-        let mut clipboard = Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e.to_string()))?;
+        let mut clipboard = Clipboard::new()
+            .map_err(|e| format!("Failed to access clipboard: {}", e.to_string()))?;
         match clipboard.get_image() {
             Ok(image_data) => {
-                log::info!("Image retrieved from clipboard. Width: {}, Height: {}", image_data.width, image_data.height);
+                log::info!(
+                    "Image retrieved from clipboard. Width: {}, Height: {}",
+                    image_data.width,
+                    image_data.height
+                );
                 let temp_dir = env::temp_dir();
                 temp_image_path = temp_dir.join(format!("{}.png", Uuid::new_v4().to_string()));
 
                 // Convert arboard::ImageData to image::DynamicImage
-                let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(image_data.width as u32, image_data.height as u32, image_data.bytes.into_owned())
-                    .ok_or_else(|| "Failed to create image buffer from clipboard data".to_string())?;
+                let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                    image_data.width as u32,
+                    image_data.height as u32,
+                    image_data.bytes.into_owned(),
+                )
+                .ok_or_else(|| "Failed to create image buffer from clipboard data".to_string())?;
                 let dynamic_img = DynamicImage::ImageRgba8(img);
 
-                dynamic_img.save_with_format(&temp_image_path, ImageFormat::Png).map_err(|e| {
-                    format!("Failed to save clipboard image to temp file: {}", e)
-                })?;
+                dynamic_img
+                    .save_with_format(&temp_image_path, ImageFormat::Png)
+                    .map_err(|e| format!("Failed to save clipboard image to temp file: {}", e))?;
                 log::info!("Clipboard image saved to: {:?}", temp_image_path);
                 successful_capture = true; // Mark capture as successful
             }
@@ -278,8 +346,10 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
                 log::error!("{}", err_msg);
                 // Check if snipping tool has a different path for /rect on newer windows versions, this is a common fallback
                 // If the error suggests 'NoImage' or similar, it's likely cancellation.
-                 if e.to_string().contains("No image available") { // Specific check for arboard error
-                    let err_msg = "Snipping cancelled or no image data found on clipboard.".to_string();
+                if e.to_string().contains("No image available") {
+                    // Specific check for arboard error
+                    let err_msg =
+                        "Snipping cancelled or no image data found on clipboard.".to_string();
                     log::info!("{}", err_msg);
                     return Err(err_msg);
                 }
@@ -319,8 +389,8 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
                 let mut image_bytes: Vec<u8> = Vec::new();
                 match image_data.write_to(&mut Cursor::new(&mut image_bytes), ImageFormat::Png) {
                     Ok(_) => {
-                         image_base64 = Some(general_purpose::STANDARD.encode(&image_bytes));
-                         log::info!("Image successfully encoded to base64.");
+                        image_base64 = Some(general_purpose::STANDARD.encode(&image_bytes));
+                        log::info!("Image successfully encoded to base64.");
                     }
                     Err(e) => {
                         log::error!("Failed to encode image to PNG bytes for base64: {}", e);
@@ -329,21 +399,23 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
                 }
             }
             Err(e) => {
-                let err_msg = format!("Failed to load screenshot image from path {:?}: {}", temp_image_path, e);
+                let err_msg = format!(
+                    "Failed to load screenshot image from path {:?}: {}",
+                    temp_image_path, e
+                );
                 log::error!("{}", err_msg);
                 // Don't return Err here, allow returning partial result if OCR somehow succeeded before (unlikely)
                 // or just return empty result. Let's return an empty result for consistency.
-                 ocr_text = "".to_string();
-                 image_base64 = None;
+                ocr_text = "".to_string();
+                image_base64 = None;
             }
         }
     } else {
-         // This case should ideally be caught by earlier returns, but as a safeguard:
-         log::warn!("Reached post-capture processing without a successful capture flag.");
-         ocr_text = "".to_string();
-         image_base64 = None;
+        // This case should ideally be caught by earlier returns, but as a safeguard:
+        log::warn!("Reached post-capture processing without a successful capture flag.");
+        ocr_text = "".to_string();
+        image_base64 = None;
     }
-
 
     // --- IMPORTANT: DO NOT DELETE temp_image_path here ---
     // The frontend will call cleanup_temp_screenshot later when needed.
@@ -353,28 +425,44 @@ async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureRes
     Ok(CaptureResult {
         ocr_text,
         image_base64,
-        temp_path: if successful_capture { Some(temp_path_string) } else { None }
+        temp_path: if successful_capture {
+            Some(temp_path_string)
+        } else {
+            None
+        },
     })
 }
 
 #[tauri::command]
 fn cleanup_temp_screenshot(path: String) -> Result<(), String> {
-    log::info!("'cleanup_temp_screenshot' command invoked for path: {}", path);
+    log::info!(
+        "'cleanup_temp_screenshot' command invoked for path: {}",
+        path
+    );
     let temp_path = PathBuf::from(path);
     if temp_path.exists() {
         match fs::remove_file(&temp_path) {
             Ok(_) => {
-                log::info!("Successfully removed temporary screenshot file: {:?}", temp_path);
+                log::info!(
+                    "Successfully removed temporary screenshot file: {:?}",
+                    temp_path
+                );
                 Ok(())
             }
             Err(e) => {
-                let err_msg = format!("Failed to remove temporary screenshot file {:?}: {}", temp_path, e);
+                let err_msg = format!(
+                    "Failed to remove temporary screenshot file {:?}: {}",
+                    temp_path, e
+                );
                 log::error!("{}", err_msg);
                 Err(err_msg)
             }
         }
     } else {
-        log::warn!("Temporary screenshot file not found for cleanup (already deleted?): {:?}", temp_path);
+        log::warn!(
+            "Temporary screenshot file not found for cleanup (already deleted?): {:?}",
+            temp_path
+        );
         Ok(()) // Not an error if it's already gone
     }
 }
@@ -383,31 +471,65 @@ fn cleanup_temp_screenshot(path: String) -> Result<(), String> {
 #[tauri::command]
 async fn send_text_to_model(text: String, app_handle: AppHandle) -> Result<ModelResponse, String> {
     let config = load_config(&app_handle)?;
-    let api_key = match config.api_key {
-        Some(key) if !key.is_empty() => key,
-        _ => {
-            log::error!("API key is not set in config.");
-            return Err("API key is not configured. Please set it in the application settings.".to_string());
-        }
-    };
-    let model_name = config.selected_model.unwrap_or_else(|| {
-        log::warn!("No model selected in config, using default: {}", DEFAULT_MODEL);
+
+    let model_name = config.selected_model.clone().unwrap_or_else(|| {
+        log::warn!(
+            "No model selected in config, using default: {}",
+            DEFAULT_MODEL
+        );
         DEFAULT_MODEL.to_string()
     });
-    log::info!("Using model: {}", model_name);
-    call_openrouter_api(text, api_key, model_name).await
+
+    log::info!("Processing request for model: {}", model_name);
+
+    // Check if the model is a Gemini model
+    if model_name.starts_with("gemini-") || model_name.starts_with("google/") { // Crude check, refine as needed
+        let gemini_api_key = match config.gemini_api_key {
+            Some(key) if !key.is_empty() => key,
+            _ => {
+                log::error!("Gemini API key is not set in config for model: {}", model_name);
+                return Err(
+                    "Gemini API key is not configured. Please set it in settings.".to_string(),
+                );
+            }
+        };
+        log::info!("Using Gemini API for model: {}", model_name);
+        // The Gemini model name might be just "gemini-1.5-flash-latest" from the select,
+        // but the API might expect "models/gemini-1.5-flash-latest".
+        // For now, let's assume the model_name is directly usable or adjust in call_gemini_api if needed.
+        call_gemini_api(text, gemini_api_key, model_name.replace("google/", "")).await // Pass the raw model name
+    } else {
+        // Fallback to OpenRouter for other models
+        let api_key = match config.api_key {
+            Some(key) if !key.is_empty() => key,
+            _ => {
+                log::error!("OpenRouter API key is not set in config for model: {}", model_name);
+                return Err(
+                    "OpenRouter API key is not configured. Please set it in settings.".to_string(),
+                );
+            }
+        };
+        log::info!(
+            "Using OpenRouter API for model: {}. Default model was: {}",
+            model_name,
+            DEFAULT_MODEL
+        );
+        call_openrouter_api(text, api_key, model_name).await
+    }
 }
 
 #[tauri::command]
 async fn get_api_key(app_handle: AppHandle) -> Result<String, String> {
-    load_config(&app_handle)
-        .map(|config| config.api_key.unwrap_or_default())
+    load_config(&app_handle).map(|config| config.api_key.unwrap_or_default())
 }
 
 #[tauri::command]
 async fn set_api_key(key: String, app_handle: AppHandle) -> Result<(), String> {
     let mut config = load_config(&app_handle).unwrap_or_else(|e| {
-        log::warn!("Failed to load config when setting API key: {}. Using default.", e);
+        log::warn!(
+            "Failed to load config when setting API key: {}. Using default.",
+            e
+        );
         AppConfig::default()
     });
     config.api_key = Some(key);
@@ -416,23 +538,32 @@ async fn set_api_key(key: String, app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_selected_model(app_handle: AppHandle) -> Result<String, String> {
-    load_config(&app_handle)
-        .map(|config| config.selected_model.unwrap_or_else(|| DEFAULT_MODEL.to_string()))
+    load_config(&app_handle).map(|config| {
+        config
+            .selected_model
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+    })
 }
 
 #[tauri::command]
 async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result<(), String> {
     let allowed_models = vec![
-        "google/gemini-2.0-flash-exp:free",
         "deepseek/deepseek-chat-v3-0324:free",
         "deepseek/deepseek-r1:free",
+        "gemini-2.0-flash", // Added Gemini models
+        "gemini-2.5-flash-preview-04-17",
+        "gemini-2.5-pro-preview-05-06"
     ];
+    // Updated check to be more specific
     if !allowed_models.contains(&model_name.as_str()) {
         log::error!("Attempted to set invalid model: {}", model_name);
-        return Err(format!("Invalid model selection: {}", model_name));
+        return Err(format!("Invalid model selection: {}. Allowed models are: {:?}", model_name, allowed_models));
     }
     let mut config = load_config(&app_handle).unwrap_or_else(|e| {
-        log::warn!("Failed to load config when setting model: {}. Using default.", e);
+        log::warn!(
+            "Failed to load config when setting model: {}. Using default.",
+            e
+        );
         AppConfig::default()
     });
     log::info!("Setting selected model to: {}", model_name);
@@ -440,74 +571,227 @@ async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result
     save_config(&app_handle, &config)
 }
 
-// --- API Call Logic --- (Should remain the same)
-async fn call_openrouter_api(user_text: String, api_key: String, model_name: String) -> Result<ModelResponse, String> {
+// --- Commands for Gemini API Key ---
+#[tauri::command]
+async fn get_gemini_api_key(app_handle: AppHandle) -> Result<String, String> {
+    load_config(&app_handle).map(|config| config.gemini_api_key.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn set_gemini_api_key(key: String, app_handle: AppHandle) -> Result<(), String> {
+    let mut config = load_config(&app_handle).unwrap_or_else(|e| {
+        log::warn!(
+            "Failed to load config when setting Gemini API key: {}. Using default.",
+            e
+        );
+        AppConfig::default()
+    });
+    config.gemini_api_key = Some(key);
+    save_config(&app_handle, &config)
+}
+
+// --- API Call Logic ---
+async fn call_gemini_api(
+    user_text: String,
+    api_key: String,
+    model_name: String,
+) -> Result<ModelResponse, String> {
+    let client = reqwest::Client::new();
+    // Use :generateContent for non-streaming
+    let api_url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model_name,
+        api_key
+    );
+
+    let request_payload = GeminiChatCompletionRequest {
+        contents: vec![GeminiContent {
+            parts: vec![GeminiPart { text: user_text }],
+            role: Some("user".to_string()), // Gemini API typically requires a role for 'contents'
+        }],
+    };
+
+    log::info!("Sending request to Gemini API for model: {}", model_name);
+
+    match client.post(&api_url)
+        .header("Content-Type", "application/json")
+        .json(&request_payload)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let response_status = response.status();
+            let response_text = response.text().await.map_err(|e| {
+                log::error!("Failed to read Gemini API response text: {}", e);
+                format!("Failed to read Gemini API response text: {}", e)
+            })?;
+
+            log::debug!(
+                "Gemini API response status: {}. Body: {}",
+                response_status,
+                response_text
+            );
+
+            if response_status.is_success() {
+                match serde_json::from_str::<GeminiChatCompletionResponse>(&response_text) {
+                    Ok(gemini_response) => {
+                        if let Some(candidate) = gemini_response.candidates.get(0) {
+                            if let Some(part) = candidate.content.parts.get(0) {
+                                Ok(ModelResponse {
+                                    content: part.text.clone(),
+                                    reasoning: None, // Gemini API doesn't typically provide a separate reasoning field
+                                })
+                            } else {
+                                log::error!("Gemini response: Candidate content has no parts.");
+                                Err("Gemini response processing error: No content parts".to_string())
+                            }
+                        } else {
+                            log::error!("Gemini response contained no candidates.");
+                            Err("No candidates received from Gemini model".to_string())
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse Gemini JSON response: {}", e);
+                        log::error!("Raw Gemini JSON causing parse error: {}", response_text);
+                        Err(format!("Failed to parse Gemini response JSON: {}", e))
+                    }
+                }
+            } else {
+                log::error!(
+                    "Gemini API request failed with status {}: {}",
+                    response_status,
+                    response_text
+                );
+                Err(format!(
+                    "Gemini API request failed: {} - {}",
+                    response_status,
+                    response_text
+                ))
+            }
+        }
+        Err(e) => {
+            log::error!("Network request to Gemini API failed: {}", e);
+            Err(format!("Gemini API network request failed: {}", e))
+        }
+    }
+}
+
+async fn call_openrouter_api(
+    user_text: String,
+    api_key: String,
+    model_name: String,
+) -> Result<ModelResponse, String> {
     let client = reqwest::Client::new();
     let api_url = "https://openrouter.ai/api/v1/chat/completions";
     let request_payload = ChatCompletionRequest {
         model: model_name.clone(),
         messages: vec![
-            ChatMessage { role: "system".to_string(), content: "You are a helpful assistant.".to_string() },
-            ChatMessage { role: "user".to_string(), content: user_text },
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You are a helpful assistant.".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_text,
+            },
         ],
     };
     log::info!("Sending request to OpenRouter for model: {}", model_name);
-    match client.post(api_url)
+    match client
+        .post(api_url)
         .bearer_auth(api_key)
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "Shard")
         .json(&request_payload)
         .send()
-        .await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    match response.text().await {
-                        Ok(raw_json_text) => {
-                            log::debug!("Raw JSON response from OpenRouter: {}", raw_json_text);
-                            match serde_json::from_str::<ChatCompletionResponse>(&raw_json_text) {
-                                Ok(chat_response) => {
-                                    if let Some(choice) = chat_response.choices.get(0) {
-                                        Ok(ModelResponse {
-                                            content: choice.message.content.clone(),
-                                            reasoning: choice.message.reasoning.clone(),
-                                        })
-                                    } else {
-                                        log::error!("OpenRouter response contained no choices after parsing.");
-                                        Err("No response choices received from model".to_string())
-                                    }
-                                }
-                                Err(e) => {
-                                     log::error!("Failed to parse JSON (from_str): {}", e);
-                                     log::error!("Raw JSON causing parse error: {}", raw_json_text);
-                                     Err(format!("Failed to parse response JSON: {}", e))
+        .await
+    {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.text().await {
+                    Ok(raw_json_text) => {
+                        log::debug!("Raw JSON response from OpenRouter: {}", raw_json_text);
+                        match serde_json::from_str::<ChatCompletionResponse>(&raw_json_text) {
+                            Ok(chat_response) => {
+                                if let Some(choice) = chat_response.choices.get(0) {
+                                    Ok(ModelResponse {
+                                        content: choice.message.content.clone(),
+                                        reasoning: choice.message.reasoning.clone(),
+                                    })
+                                } else {
+                                    log::error!(
+                                        "OpenRouter response contained no choices after parsing."
+                                    );
+                                    Err("No response choices received from model".to_string())
                                 }
                             }
-                        }
-                        Err(e) => {
-                            log::error!("Failed to read response text: {}", e);
-                            Err(format!("Failed to read response text: {}", e))
+                            Err(e) => {
+                                log::error!("Failed to parse JSON (from_str): {}", e);
+                                log::error!("Raw JSON causing parse error: {}", raw_json_text);
+                                Err(format!("Failed to parse response JSON: {}", e))
+                            }
                         }
                     }
-                } else {
-                    let status = response.status();
-                    let error_text = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
-                    log::error!("OpenRouter API request failed with status {}: {}", status, error_text);
-                    Err(format!("API request failed: {} - {}", status, error_text))
+                    Err(e) => {
+                        log::error!("Failed to read response text: {}", e);
+                        Err(format!("Failed to read response text: {}", e))
+                    }
                 }
-            }
-            Err(e) => {
-                 log::error!("Network request to OpenRouter failed: {}", e);
-                 Err(format!("Network request failed: {}", e))
+            } else {
+                let status = response.status();
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                log::error!(
+                    "OpenRouter API request failed with status {}: {}",
+                    status,
+                    error_text
+                );
+                Err(format!("API request failed: {} - {}", status, error_text))
             }
         }
+        Err(e) => {
+            log::error!("Network request to OpenRouter failed: {}", e);
+            Err(format!("Network request failed: {}", e))
+        }
+    }
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let show_hide_modifiers = if cfg!(target_os = "macos") {
+        tauri_gs::Modifiers::SUPER | tauri_gs::Modifiers::SHIFT
+    } else {
+        tauri_gs::Modifiers::CONTROL | tauri_gs::Modifiers::SHIFT
+    };
+    let show_hide_shortcut_definition = tauri_gs::Shortcut::new(Some(show_hide_modifiers), tauri_gs::Code::KeyZ);
+
     tauri::Builder::default()
-        // Removed region selector plugin logic if any was here
+        .plugin(
+            tauri_gs::Builder::new()
+                .with_handler(move |app_handle: &AppHandle, shortcut_fired: &Shortcut, event: ShortcutEvent| {
+                    if shortcut_fired == &show_hide_shortcut_definition {
+                        if event.state() == ShortcutState::Pressed {
+                            log::info!("[Plugin Shortcut] CmdOrCtrl+Shift+Z pressed. Emitting event to frontend.");
+                            app_handle.emit("toggle-main-window", ()).unwrap_or_else(|e| {
+                                eprintln!("[Plugin Shortcut] Failed to emit toggle-main-window event: {}", e);
+                            });
+                        }
+                    }
+                })
+                .build()
+        )
         .setup(move |app| {
+            #[cfg(desktop)]
+            {
+                if let Err(e) = app.global_shortcut().register(show_hide_shortcut_definition.clone()) {
+                    eprintln!("Failed to register global shortcut via plugin in setup: {}", e);
+                } else {
+                    log::info!("Successfully registered global shortcut via plugin in setup: CmdOrCtrl+Shift+Z");
+                }
+            }
+
             if cfg!(debug_assertions) {
                 match app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -540,9 +824,10 @@ pub fn run() {
             match load_config(&config_handle) {
                 Ok(config) => {
                     log::info!(
-                        "Loaded config during setup. API key is {}. Selected model: {:?}",
+                        "Loaded config during setup. API key is {}. Selected model: {:?}. Gemini API key is {}.",
                         if config.api_key.is_some() { "set" } else { "not set" },
-                        config.selected_model.as_deref().unwrap_or("None (will use default)")
+                        config.selected_model.as_deref().unwrap_or("None (will use default)"),
+                        if config.gemini_api_key.is_some() { "set" } else { "not set" }
                     );
                     let config_path = get_config_path(&config_handle).expect("Failed to get config path in setup");
                     if config_path.exists() && config.selected_model.is_none() {
@@ -578,14 +863,27 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    if let Err(e) = window.hide() {
+                        eprintln!("Failed to hide window on close request: {}", e);
+                    }
+                    api.prevent_close();
+                }
+                _ => {}
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             send_text_to_model,
             get_api_key,
             set_api_key,
             get_selected_model,
             set_selected_model,
-            capture_interactive_and_ocr, // Updated command name
-            cleanup_temp_screenshot    // Added new command
+            capture_interactive_and_ocr,
+            cleanup_temp_screenshot,
+            get_gemini_api_key,
+            set_gemini_api_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

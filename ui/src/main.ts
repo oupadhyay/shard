@@ -1,15 +1,38 @@
 import './style.css'
 import { core } from '@tauri-apps/api'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { Window } from '@tauri-apps/api/window'
 
 // DOM Elements
 const apiKeyInput = document.getElementById('api-key-input') as HTMLInputElement
-const saveApiKeyButton = document.getElementById('save-api-key') as HTMLButtonElement
+const geminiApiKeyInput = document.getElementById('gemini-api-key-input') as HTMLInputElement
 const settingsStatus = document.getElementById('settings-status') as HTMLParagraphElement
+const apiKeyStatusIcon = document.getElementById('api-key-status-icon') as HTMLSpanElement
 const settingsToggle = document.getElementById('settings-toggle') as HTMLButtonElement
 const settingsPanel = document.getElementById('settings-panel') as HTMLDivElement
 const clearChatButton = document.getElementById('clear-chat-button') as HTMLButtonElement
 const modelSelect = document.getElementById('model-select') as HTMLSelectElement
+
+const FADE_DURATION_SETTINGS = 80; // Duration for settings panel fade
+
+// Create and add close button to settings panel
+if (settingsPanel) {
+  const closeButton = document.createElement('button');
+  closeButton.id = 'settings-close';
+  closeButton.innerHTML = '×'; // Using × character for the X
+  closeButton.title = 'Close Settings';
+  settingsPanel.appendChild(closeButton);
+
+  // Add click handler for close button
+  closeButton.addEventListener('click', () => {
+    settingsPanel.classList.remove('fade-in-settings'); // Start fade-out
+    setTimeout(() => {
+      settingsPanel.style.display = 'none';
+    }, FADE_DURATION_SETTINGS);
+    document.removeEventListener('click', handleClickOutsideSettings); // Remove listener
+  });
+}
 
 const messageInput = document.getElementById('message-input') as HTMLTextAreaElement
 const inputImagePreview = document.getElementById('input-image-preview') as HTMLImageElement
@@ -21,7 +44,9 @@ const statusMessage = document.getElementById('status-message') as HTMLParagraph
 const modelMap: { [key: string]: string } = {
   "Deepseek R1 (free)": "deepseek/deepseek-r1:free",
   "Deepseek V3 (free)": "deepseek/deepseek-chat-v3-0324:free",
-  "Gemini 2.0 Flash (free)": "google/gemini-2.0-flash-exp:free",
+  "Gemini 2.0 Flash": "gemini-2.0-flash",
+  "Gemini 2.5 Flash": "gemini-2.5-flash-preview-04-17",
+  "Gemini 2.5 Pro": "gemini-2.5-pro-preview-05-06"
 };
 
 // Define the expected response structure from the backend
@@ -61,7 +86,7 @@ async function loadInitialSettings() {
   // Load API Key
   try {
     const key = await invoke<string>('get_api_key')
-    apiKeyInput.value = key || ''
+    if (apiKeyInput) apiKeyInput.value = key || ''
     if (key) {
       console.log('API Key loaded.')
     } else {
@@ -70,7 +95,23 @@ async function loadInitialSettings() {
     }
   } catch (error) {
     console.error('Failed to load API key:', error)
-    settingsStatus.textContent = `Error loading key: ${error}`
+    if (settingsStatus) settingsStatus.textContent = `Error loading key: ${error}`
+  }
+
+  // Load Gemini API Key
+  if (geminiApiKeyInput) {
+    try {
+      const geminiKey = await invoke<string>('get_gemini_api_key');
+      geminiApiKeyInput.value = geminiKey || '';
+      if (geminiKey) {
+        console.log('Gemini API Key loaded.');
+      } else {
+        console.log('Gemini API Key not set.');
+      }
+    } catch (error) {
+      console.error('Failed to load Gemini API key:', error);
+      if (settingsStatus) settingsStatus.textContent = `Error loading Gemini key: ${error}`;
+    }
   }
 
   // Populate model dropdown first
@@ -104,38 +145,6 @@ async function loadInitialSettings() {
       console.error("Failed to load selected model:", error);
       if(settingsStatus) settingsStatus.textContent = `Error loading model: ${error}`;
     }
-  }
-}
-
-// --- API Key Management ---
-// async function loadApiKey() {
-//   try {
-//     const key = await invoke<string>('get_api_key')
-//     apiKeyInput.value = key || ''
-//     if (key) {
-//       console.log('API Key loaded.')
-//     } else {
-//       console.log('API Key not set.')
-//     }
-//   } catch (error) {
-//     console.error('Failed to load API key:', error)
-//     settingsStatus.textContent = `Error loading key: ${error}`
-//   }
-// }
-
-async function saveApiKey() {
-  const key = apiKeyInput.value.trim()
-  if (!key) {
-    settingsStatus.textContent = 'API Key cannot be empty.'
-    return
-  }
-  try {
-    await core.invoke('set_api_key', { key })
-    settingsStatus.textContent = 'API Key saved!'
-    setTimeout(() => settingsStatus.textContent = '', 3000) // Clear status after 3s
-  } catch (error) {
-    console.error('Failed to save API key:', error)
-    settingsStatus.textContent = 'Error saving API key.'
   }
 }
 
@@ -418,8 +427,78 @@ async function handleSendMessage() {
 window.addEventListener('DOMContentLoaded', () => {
   loadInitialSettings();
 
-  if (saveApiKeyButton) {
-    saveApiKeyButton.addEventListener('click', saveApiKey)
+  if (apiKeyInput) {
+    // Add input event listener with debounce for auto-saving
+    let saveTimeout: number;
+    apiKeyInput.addEventListener('input', () => {
+      clearTimeout(saveTimeout);
+      const key = apiKeyInput.value.trim();
+
+      // Update immediately if clearing the key
+      if (!key) {
+        core.invoke('set_api_key', { key });
+        if (settingsStatus) settingsStatus.textContent = 'API Key cleared';
+        if (apiKeyStatusIcon) apiKeyStatusIcon.classList.remove('visible');
+        setTimeout(() => {
+          if (settingsStatus && settingsStatus.textContent === 'API Key cleared') settingsStatus.textContent = '';
+        }, 3000);
+        return;
+      }
+
+      // Otherwise, debounce the save
+      saveTimeout = setTimeout(async () => {
+        try {
+          await core.invoke('set_api_key', { key });
+          if (settingsStatus) settingsStatus.textContent = '';
+          if (apiKeyStatusIcon) {
+            apiKeyStatusIcon.classList.add('visible');
+            setTimeout(() => {
+              apiKeyStatusIcon.classList.remove('visible');
+            }, 2000);
+          }
+        } catch (error) {
+          console.error('Failed to save API key:', error);
+          if (apiKeyStatusIcon) apiKeyStatusIcon.classList.remove('visible');
+          if (settingsStatus) settingsStatus.textContent = 'Error saving API key.';
+        }
+      }, 500); // Wait 500ms after last keystroke before saving
+    });
+  }
+
+  // Listener for Gemini API Key input
+  if (geminiApiKeyInput) {
+    let geminiSaveTimeout: number;
+    geminiApiKeyInput.addEventListener('input', () => {
+      clearTimeout(geminiSaveTimeout);
+      const key = geminiApiKeyInput.value.trim();
+
+      if (!key) {
+        core.invoke('set_gemini_api_key', { key });
+        if (settingsStatus) settingsStatus.textContent = 'Gemini API Key cleared';
+        if (apiKeyStatusIcon) apiKeyStatusIcon.classList.remove('visible');
+        setTimeout(() => {
+          if (settingsStatus && settingsStatus.textContent === 'Gemini API Key cleared') settingsStatus.textContent = '';
+        }, 3000);
+        return;
+      }
+
+      geminiSaveTimeout = setTimeout(async () => {
+        try {
+          await core.invoke('set_gemini_api_key', { key });
+          if (settingsStatus) settingsStatus.textContent = '';
+          if (apiKeyStatusIcon) {
+            apiKeyStatusIcon.classList.add('visible');
+            setTimeout(() => {
+              apiKeyStatusIcon.classList.remove('visible');
+            }, 2000);
+          }
+        } catch (error) {
+          console.error('Failed to save Gemini API key:', error);
+          if (apiKeyStatusIcon) apiKeyStatusIcon.classList.remove('visible');
+          if (settingsStatus) settingsStatus.textContent = 'Error saving Gemini API key.';
+        }
+      }, 500);
+    });
   }
 
   if (messageInput) {
@@ -439,11 +518,22 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   if (settingsToggle) {
-    settingsToggle.addEventListener('click', () => {
+    settingsToggle.addEventListener('click', (_event) => {
       if (settingsPanel.style.display === 'none' || settingsPanel.style.display === '') {
-        settingsPanel.style.display = 'block'
+        settingsPanel.style.display = 'block';
+        // Force reflow before adding class to ensure transition happens
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            settingsPanel.classList.add('fade-in-settings');
+          });
+        });
+        setTimeout(() => document.addEventListener('click', handleClickOutsideSettings), 0);
       } else {
-        settingsPanel.style.display = 'none'
+        settingsPanel.classList.remove('fade-in-settings'); // Start fade-out
+        setTimeout(() => {
+          settingsPanel.style.display = 'none';
+        }, FADE_DURATION_SETTINGS);
+        document.removeEventListener('click', handleClickOutsideSettings);
       }
     })
   }
@@ -460,10 +550,6 @@ window.addEventListener('DOMContentLoaded', () => {
       try {
         await invoke("set_selected_model", { modelName: selectedModelId });
         console.log("Successfully saved selected model:", selectedModelId);
-        if (settingsStatus) {
-            settingsStatus.textContent = "Model selection saved.";
-            setTimeout(() => settingsStatus.textContent = '', 3000);
-        }
       } catch (error) {
         console.error("Failed to save selected model:", error);
         if (settingsStatus) settingsStatus.textContent = `Error saving model: ${error}`;
@@ -476,3 +562,69 @@ window.addEventListener('DOMContentLoaded', () => {
     ocrIconContainer.addEventListener('click', handleCaptureOcr);
   }
 })
+
+// --- Event Listener for Window Toggle ---
+const FADE_DURATION = 300; // ms - Should match CSS transition duration
+
+// --- Function to handle clicks outside the settings panel ---
+function handleClickOutsideSettings(event: MouseEvent) {
+  if (settingsPanel && settingsPanel.style.display === 'block') {
+    // Check if the click is outside the panel AND not on the toggle button itself
+    if (!settingsPanel.contains(event.target as Node) && event.target !== settingsToggle) {
+      settingsPanel.classList.remove('fade-in-settings'); // Start fade-out
+      setTimeout(() => {
+        settingsPanel.style.display = 'none';
+      }, FADE_DURATION_SETTINGS);
+      document.removeEventListener('click', handleClickOutsideSettings);
+    }
+  }
+}
+
+listen('toggle-main-window', async () => {
+  console.log('toggle-main-window event received from backend!');
+  const mainWindow = await Window.getByLabel('main');
+  if (!mainWindow) {
+    console.error("Main window not found by label 'main'!");
+    return;
+  }
+
+  const isVisible = await mainWindow.isVisible();
+  const bodyElement = document.body;
+
+  if (isVisible) {
+    console.log('Fading out window...');
+    bodyElement.classList.add('fade-out');
+    bodyElement.classList.remove('fade-in'); // Ensure fade-in is removed
+
+    // Wait for fade-out animation to complete before hiding
+    setTimeout(async () => {
+      await mainWindow.hide();
+      bodyElement.classList.remove('fade-out'); // Clean up class
+      console.log('Window hidden.');
+    }, FADE_DURATION);
+
+  } else {
+    console.log('Fading in window...');
+    // Ensure opacity is 0 before showing if using fade-in class
+    bodyElement.style.opacity = '0'; // Start transparent
+    bodyElement.classList.remove('fade-out'); // Ensure fade-out is removed
+
+    await mainWindow.show(); // Show the (transparent) window
+    await mainWindow.setFocus(); // Focus it
+
+    // Force reflow/repaint before adding fade-in class might be needed in some cases
+    // but often just adding the class works.
+    requestAnimationFrame(() => {
+      bodyElement.style.opacity = ''; // Reset opacity for CSS transition
+      bodyElement.classList.add('fade-in');
+      console.log('Fade-in class added.');
+
+      // Optional: Remove fade-in class after animation completes to reset state
+      setTimeout(() => {
+        bodyElement.classList.remove('fade-in');
+      }, FADE_DURATION);
+    });
+  }
+});
+
+console.log('Frontend listener for toggle-main-window set up.');

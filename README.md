@@ -15,7 +15,7 @@ A Tauri application for screen interaction with AI models.
 
 ### In Progress Features
 
-*   Copy to Clipboard (Idea 0.3.2 💡)
+*   Copy to Clipboard (Ideation 💡)
 
 ## IMPORTANT: Prerequisites
 

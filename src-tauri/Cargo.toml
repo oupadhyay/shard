@@ -1,6 +1,6 @@
 [package]
 name = "Shard"
-version = "0.3.1"
+version = "0.3.2"
 description = "An AI Research Companion Built on Rust & Tauri"
 authors = ["oupadhyay"]
 license = "MIT"
@@ -34,6 +34,8 @@ tauri-plugin-log = "2.0.0-rc"
 arboard = "3.4"
 base64 = "0.21"
 futures-util = "0.3"
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+cocoa = "0.25"
 
 [features]
 # By default Tauri runs in production mode without the dev server attached, enabling development debugging features, devserver support, etc.

@@ -474,7 +474,7 @@ async function handleSendMessage() {
     // Actual message completion enables it in STREAM_END or STREAM_ERROR
     if (messageInput) {
       messageInput.disabled = false;
-      // messageInput.focus(); // Focus will be handled by stream end/error
+      // messageInput.focus();
     }
     // Ensure preview/tooltip are cleared in case they weren't before
     updateInputAreaForCapture();
@@ -610,7 +610,7 @@ async function setupStreamListeners() {
     }
     if (messageInput) {
       messageInput.disabled = false;
-      messageInput.focus();
+      // messageInput.focus();
     }
     currentAssistantMessageDiv = null;
     currentAssistantContentDiv = null;
@@ -630,7 +630,7 @@ async function setupStreamListeners() {
     }
     if (messageInput) {
       messageInput.disabled = false;
-      messageInput.focus();
+      // messageInput.focus();
     }
     currentAssistantMessageDiv = null;
     currentAssistantContentDiv = null;
@@ -824,10 +824,11 @@ listen('toggle-main-window', async () => {
     bodyElement.classList.remove('fade-out'); // Ensure fade-out is removed
 
     await mainWindow.show(); // Show the (transparent) window
-    await mainWindow.setFocus(); // Focus it
+    if (messageInput) {
+      messageInput.focus(); // Focus the input field when window is shown
+    }
 
     // Force reflow/repaint before adding fade-in class might be needed in some cases
-    // but often just adding the class works.
     requestAnimationFrame(() => {
       bodyElement.style.opacity = ''; // Reset opacity for CSS transition
       bodyElement.classList.add('fade-in');

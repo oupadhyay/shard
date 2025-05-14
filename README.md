@@ -11,6 +11,7 @@ A Tauri application for screen interaction with AI models.
 *   Markdown Rendering (0.3.0 and after)
 *   LaTeX Rendering (0.3.0 and after)
 *   Streaming Responses (0.3.1 and after)
+*   Background Mode (0.3.2 and [MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 
 ### In Progress Features
 

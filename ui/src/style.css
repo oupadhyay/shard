@@ -38,8 +38,7 @@ body {
   height: 100%; /* Use min-height */
   overflow: hidden; /* Prevent scrollbars on body */
   /* Add the radial gradient background */
-  background: radial-gradient(circle at bottom left, rgba(80, 80, 80, 0.15) 0%, transparent 40%); /* Adjust color/opacity/stop % as needed */
-  /* justify-content: flex-end; */ /* Removed: Rely on input-area margin-top: auto */
+  background: radial-gradient(circle at bottom left, rgba(80, 80, 80, 0.25) 0%, transparent 45%); /* Adjust color/opacity/stop % as needed */
 }
 
 /* Container */

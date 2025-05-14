@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)] // Added to suppress unexpected_cfgs warnings from dependencies
+
 use base64::{engine::general_purpose, Engine as _}; // Added base64 import
 use image::{DynamicImage, ImageFormat};
 use reqwest;
@@ -13,15 +15,10 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent, Window}; // Added Emitter 
 use tauri_plugin_global_shortcut::{
     self as tauri_gs, GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState,
 };
+use tauri_nspanel::WebviewWindowExt; // CORRECTED IMPORT
+use tauri_nspanel::{panel_delegate, Panel}; // Added for panel delegate
 use tesseract; // Uncommented
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
-
-#[cfg(target_os = "windows")]
-use arboard::Clipboard;
-#[cfg(target_os = "windows")]
-use std::thread;
-#[cfg(target_os = "windows")]
-use std::time::Duration;
 
 // Default model if none is selected
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
@@ -544,9 +541,6 @@ async fn send_text_to_model(
         };
         log::info!("Using Gemini API for model: {}", model_name);
 
-        // TODO: Implement streaming for Gemini API. For now, it will error or not stream.
-        // For simplicity in this step, we'll let Gemini calls potentially fail or return non-streamed if they don't support it yet.
-        // A proper implementation would require call_gemini_api to also accept window and stream.
         match call_gemini_api(messages, gemini_api_key, model_name.replace("google/", ""), window.clone()).await {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -945,6 +939,13 @@ async fn call_openrouter_api(
     }
 }
 
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn window_should_become_key(_panel: Panel) -> bool {
+    log::info!("NSPanelDelegate: windowShouldBecomeKey called, returning false to prevent focus.");
+    false
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let show_hide_modifiers = if cfg!(target_os = "macos") {
@@ -969,6 +970,7 @@ pub fn run() {
                 })
                 .build()
         )
+        .plugin(tauri_nspanel::init())
         .setup(move |app| {
             #[cfg(desktop)]
             {
@@ -1048,6 +1050,35 @@ pub fn run() {
                     }
                 }
             }
+
+            // Convert the main window to a panel (for macOS only)
+            #[cfg(target_os = "macos")]
+            {
+                #[allow(non_upper_case_globals)]
+                const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+                if let Some(window) = app.get_webview_window("main") {
+                    match window.to_panel() {
+                        Ok(panel) => {
+                            panel.set_released_when_closed(true);
+                            log::info!("Successfully converted main window to NSPanel.");
+
+                            // Set the style mask to make it a non-activating panel
+                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+                            log::info!("Set NSWindowStyleMaskNonActivatingPanel(1 << 7) on NSPanel.");
+
+                            let delegate = panel_delegate!(NSPanelDelegateHook {
+                                window_should_become_key
+                            });
+                            panel.set_delegate(delegate);
+                            log::info!("NSPanel delegate set to prevent focus.");
+                        }
+                        Err(e) => {
+                            log::error!("Failed to convert main window to NSPanel: {:?}", e);
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

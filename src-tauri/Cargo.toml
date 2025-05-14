@@ -1,6 +1,6 @@
 [package]
 name = "Shard"
-version = "0.2.0"
+version = "0.3.1"
 description = "An AI Research Companion Built on Rust & Tauri"
 authors = ["oupadhyay"]
 license = "MIT"
@@ -22,7 +22,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.5.1", features = ["macos-private-api"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 window-vibrancy = "0.6.0"
@@ -33,6 +33,7 @@ uuid = { version = "1.8", features = ["v4"] }
 tauri-plugin-log = "2.0.0-rc"
 arboard = "3.4"
 base64 = "0.21"
+futures-util = "0.3"
 
 [features]
 # By default Tauri runs in production mode without the dev server attached, enabling development debugging features, devserver support, etc.

@@ -2,12 +2,19 @@
 
 A Tauri application for screen interaction with AI models.
 
-## Features
+## Completed Features
 
 *   Chat interface with OpenRouter models (DeepSeek V3, Gemini Flash, DeepSeek R1)
 *   API Key Management
 *   Model Selection
 *   **Screen Capture + OCR Analysis** (Requires Tesseract)
+*   Markdown Rendering (0.3.0 and after)
+*   LaTeX Rendering (0.3.0 and after)
+
+### In Progress Features
+
+*   Streaming Responses (Building 0.3.1 🛠️)
+*   Copy to Clipboard (Idea 0.3.2 💡)
 
 ## IMPORTANT: Prerequisites
 

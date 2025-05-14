@@ -3,6 +3,13 @@ import { core } from '@tauri-apps/api'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Window } from '@tauri-apps/api/window'
+import MarkdownIt from 'markdown-it'
+import markdownItKatex from '@vscode/markdown-it-katex'
+import 'katex/dist/katex.min.css';
+
+// Configure markdown-it to use KaTeX
+const md = new MarkdownIt()
+md.use(markdownItKatex, { throwOnError: false })
 
 // DOM Elements
 const apiKeyInput = document.getElementById('api-key-input') as HTMLInputElement
@@ -46,37 +53,47 @@ const modelMap: { [key: string]: string } = {
   "Deepseek V3 (free)": "deepseek/deepseek-chat-v3-0324:free",
   "Gemini 2.0 Flash": "gemini-2.0-flash",
   "Gemini 2.5 Flash": "gemini-2.5-flash-preview-04-17",
-  "Gemini 2.5 Pro": "gemini-2.5-pro-preview-05-06"
+  "Gemini 2.5 Flash (Thinking)": "gemini-2.5-flash-preview-04-17#thinking-enabled",
 };
-
-// Define the expected response structure from the backend
-interface ModelResponse {
-  content: string;
-  reasoning: string | null; // Reasoning can be null
-}
 
 // Define the structure returned by the capture command
 interface CaptureResult {
-    ocr_text: string;
-    image_base64: string | null;
-    temp_path: string | null;
+  ocr_text: string;
+  image_base64: string | null;
+  temp_path: string | null;
+}
+
+// Type for chat messages in the history
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+// --- Constants for History Management ---
+const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
+
+// --- Helper function to count words ---
+function getWordCount(text: string): number { // ADDED
+  return text.split(/\s+/).filter(Boolean).length; // ADDED
 }
 
 // State Variables
-let isChatCleared = false; // Flag to track if chat was cleared
+let chatMessageHistory: ChatMessage[] = [];
 let currentOcrText: string | null = null;
 let currentImageBase64: string | null = null;
 let currentTempScreenshotPath: string | null = null;
+let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold the div of the assistant's message being streamed
+let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
 
 // --- Populate Model Select Dropdown ---
 function populateModelSelect() {
   if (!modelSelect) return;
   modelSelect.innerHTML = ''; // Clear existing options
   for (const displayName in modelMap) {
-      const option = document.createElement("option");
-      option.value = modelMap[displayName]; // Use the identifier as the value
-      option.textContent = displayName;
-      modelSelect.appendChild(option);
+    const option = document.createElement("option");
+    option.value = modelMap[displayName]; // Use the identifier as the value
+    option.textContent = displayName;
+    modelSelect.appendChild(option);
   }
   console.log("Model select populated.");
 }
@@ -135,15 +152,15 @@ async function loadInitialSettings() {
         }
         if (!modelFound) {
           console.warn(`Saved model ID "${selectedModelId}" not found in dropdown options. Defaulting to first option.`);
-           // Optionally set to a default if the saved one is invalid or not found
-           // modelSelect.selectedIndex = 0; // Or handle as needed
+          // Optionally set to a default if the saved one is invalid or not found
+          // modelSelect.selectedIndex = 0; // Or handle as needed
         }
       } else {
         console.log("No selected model ID returned or modelSelect.options not available. Using default selection.");
       }
     } catch (error) {
       console.error("Failed to load selected model:", error);
-      if(settingsStatus) settingsStatus.textContent = `Error loading model: ${error}`;
+      if (settingsStatus) settingsStatus.textContent = `Error loading model: ${error}`;
     }
   }
 }
@@ -151,14 +168,14 @@ async function loadInitialSettings() {
 // --- Helper to auto-resize textarea ---
 const initialTextareaHeight = 'calc(2em * 1.4)'; // Store initial height
 function autoResizeTextarea() {
-    if (!messageInput) return;
-    // Temporarily shrink height to get accurate scrollHeight
-    messageInput.style.height = 'auto';
-    // Set height based on content, but don't exceed a max
-    const newHeight = Math.min(messageInput.scrollHeight, 200); // Limit max height to 200px (adjust as needed)
-    messageInput.style.height = `${newHeight}px`;
-    // Show scrollbar if content exceeds max height
-    messageInput.style.overflowY = newHeight >= 200 ? 'auto' : 'hidden';
+  if (!messageInput) return;
+  // Temporarily shrink height to get accurate scrollHeight
+  messageInput.style.height = 'auto';
+  // Set height based on content, but don't exceed a max
+  const newHeight = Math.min(messageInput.scrollHeight, 200); // Limit max height to 200px (adjust as needed)
+  messageInput.style.height = `${newHeight}px`;
+  // Show scrollbar if content exceeds max height
+  messageInput.style.overflowY = newHeight >= 200 ? 'auto' : 'hidden';
 }
 
 // --- Chat Functionality ---
@@ -172,13 +189,32 @@ function addMessageToHistory(sender: 'You' | 'Shard', content: string, reasoning
   messageDiv.appendChild(senderStrong)
 
   // Add main content
-  // Use innerHTML to render potential markdown/formatting later if needed, for now textNode is safer
-  // const contentNode = document.createTextNode(content);
-  // messageDiv.appendChild(contentNode);
   const contentDiv = document.createElement('div');
-  contentDiv.textContent = content; // Or .innerHTML = marked(content) if using a markdown parser
+  contentDiv.classList.add('message-content');
+  try {
+    contentDiv.innerHTML = md.render(content); // Render complete content
+  } catch (e) {
+    console.error("Error parsing markdown/katex:", e);
+    contentDiv.textContent = content; // Fallback to text if parsing fails
+  }
   messageDiv.appendChild(contentDiv);
 
+  // If this is an assistant message being added (likely at the END of a stream or for non-streamed errors)
+  // store its content div reference in case it was a non-streamed one (e.g. an error message directly added)
+  if (sender === 'Shard') {
+    currentAssistantMessageDiv = messageDiv; // Store the whole message div
+    currentAssistantContentDiv = contentDiv; // Store the content div specifically for updates
+  }
+
+  // Add to chatMessageHistory AFTER it's been decided what to display
+  // For streamed messages, this will be updated in STREAM_END
+  if (sender === 'You' || (sender === 'Shard' && !chatHistory.querySelector('.message.assistant.thinking'))) {
+    // Add user messages immediately.
+    // Add Shard messages only if it's not a streaming placeholder (which gets updated by STREAM_END)
+    // This handles direct error messages from Shard added via addMessageToHistory.
+    const role = sender === 'You' ? 'user' : 'assistant';
+    chatMessageHistory.push({ role, content });
+  }
 
   // Add reasoning accordion if reasoning is present for assistant messages
   if (sender === 'Shard' && reasoning) {
@@ -200,6 +236,15 @@ function addMessageToHistory(sender: 'You' | 'Shard', content: string, reasoning
     messageDiv.appendChild(details);
   }
 
+  // Prune history if it exceeds word count limit
+  let currentTotalWords = chatMessageHistory.reduce((sum, msg) => sum + getWordCount(msg.content), 0);
+  while (currentTotalWords > MAX_HISTORY_WORD_COUNT && chatMessageHistory.length > 1) {
+    const removedMessage = chatMessageHistory.shift();
+    if (removedMessage) {
+      currentTotalWords -= getWordCount(removedMessage.content);
+    }
+  }
+  // console.log(`Current history word count: ${currentTotalWords}, messages: ${chatMessageHistory.length}`); // Optional: for debugging
 
   chatHistory.appendChild(messageDiv)
   chatHistory.scrollTop = chatHistory.scrollHeight // Auto-scroll to bottom
@@ -207,225 +252,394 @@ function addMessageToHistory(sender: 'You' | 'Shard', content: string, reasoning
 
 // --- Helper to update Input Preview and Tooltip ---
 function updateInputAreaForCapture() {
-    if (currentOcrText) {
-        messageInput.title = currentOcrText; // Set tooltip on input
-    } else {
-        messageInput.title = ''; // Clear tooltip
-    }
+  if (currentOcrText) {
+    messageInput.title = currentOcrText; // Set tooltip on input
+  } else {
+    messageInput.title = ''; // Clear tooltip
+  }
 
-    if (currentImageBase64) {
-        inputImagePreview.src = `data:image/png;base64,${currentImageBase64}`;
-        inputImagePreview.classList.remove('hidden');
-    } else {
-        inputImagePreview.src = '';
-        inputImagePreview.classList.add('hidden');
-    }
+  if (currentImageBase64) {
+    inputImagePreview.src = `data:image/png;base64,${currentImageBase64}`;
+    inputImagePreview.classList.remove('hidden');
+  } else {
+    inputImagePreview.src = '';
+    inputImagePreview.classList.add('hidden');
+  }
 }
 
 // --- Clear Chat Handler ---
 function clearChatHistory() {
-    if (chatHistory) chatHistory.innerHTML = '';
-    isChatCleared = true; // Set flag when clearing
-    console.log('Chat history cleared.');
-    // Hide clear button again
-    if (clearChatButton) clearChatButton.classList.add('hidden');
+  if (chatHistory) chatHistory.innerHTML = '';
+  console.log('Chat history cleared.');
+  chatMessageHistory = [];
+  // Hide clear button again
+  if (clearChatButton) clearChatButton.classList.add('hidden');
 
-    // Clear capture state and cleanup temp file if necessary
-    if (currentTempScreenshotPath) {
-        console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
-        invoke('cleanup_temp_screenshot', { path: currentTempScreenshotPath })
-            .then(() => console.log("Temp screenshot cleanup successful."))
-            .catch(err => console.error("Error cleaning up temp screenshot:", err));
-    }
-    currentOcrText = null;
-    currentImageBase64 = null;
-    currentTempScreenshotPath = null;
-    updateInputAreaForCapture(); // Clear preview and tooltip
+  // Clear capture state and cleanup temp file if necessary
+  if (currentTempScreenshotPath) {
+    console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
+    invoke('cleanup_temp_screenshot', { path: currentTempScreenshotPath })
+      .then(() => console.log("Temp screenshot cleanup successful."))
+      .catch(err => console.error("Error cleaning up temp screenshot:", err));
+  }
+  currentOcrText = null;
+  currentImageBase64 = null;
+  currentTempScreenshotPath = null;
+  updateInputAreaForCapture(); // Clear preview and tooltip
 
-    if (statusMessage) statusMessage.textContent = ''; // Clear status
+  if (statusMessage) statusMessage.textContent = ''; // Clear status
 }
 
 // --- Capture OCR Handler ---
 async function handleCaptureOcr() {
-    console.log('Capture OCR initiated');
-    isChatCleared = false; // Allow new messages
+  console.log('Capture OCR initiated');
+  if (statusMessage) {
+    statusMessage.textContent = 'Starting screen capture...';
+    statusMessage.style.display = 'block';
+  }
+  // Clear previous capture state *before* starting new capture
+  if (currentTempScreenshotPath) {
+    console.log("Cleaning up previous temp screenshot:", currentTempScreenshotPath);
+    await invoke('cleanup_temp_screenshot', { path: currentTempScreenshotPath })
+      .catch(err => console.error("Error cleaning up previous temp screenshot:", err));
+    currentTempScreenshotPath = null; // Ensure path is cleared even if cleanup fails
+  }
+  currentOcrText = null;
+  currentImageBase64 = null;
+  updateInputAreaForCapture();
+
+  // Visually indicate loading
+  if (ocrIconContainer) ocrIconContainer.style.opacity = '0.5';
+
+  try {
+    const result = await core.invoke<CaptureResult>('capture_interactive_and_ocr');
+    console.log('Capture Result:', result);
+
+    currentOcrText = result.ocr_text;
+    currentImageBase64 = result.image_base64;
+    currentTempScreenshotPath = result.temp_path;
+
+    updateInputAreaForCapture(); // Update input tooltip and image preview
+
     if (statusMessage) {
-        statusMessage.textContent = 'Starting screen capture...';
-        statusMessage.style.display = 'block';
+      if (currentOcrText || currentImageBase64) {
+        statusMessage.textContent = 'Capture complete. OCR text added as tooltip to input.';
+        // Auto-hide status after a delay
+        setTimeout(() => {
+          if (statusMessage && statusMessage.textContent === 'Capture complete. OCR text added as tooltip to input.') {
+            statusMessage.style.display = 'none';
+            statusMessage.textContent = '';
+          }
+        }, 4000);
+      } else {
+        statusMessage.textContent = 'Capture complete, but no image or text was processed.';
+      }
     }
-    // Clear previous capture state *before* starting new capture
-    if (currentTempScreenshotPath) {
-        console.log("Cleaning up previous temp screenshot:", currentTempScreenshotPath);
-        await invoke('cleanup_temp_screenshot', { path: currentTempScreenshotPath })
-            .catch(err => console.error("Error cleaning up previous temp screenshot:", err));
-        currentTempScreenshotPath = null; // Ensure path is cleared even if cleanup fails
-    }
+
+  } catch (error) {
+    console.error('Error during interactive capture/OCR:', error);
+    const errorMessage = typeof error === 'string' ? error : 'Capture cancelled or failed.';
+    // Clear any potentially partially set state
     currentOcrText = null;
     currentImageBase64 = null;
+    currentTempScreenshotPath = null; // Ensure path isn't left hanging on error
     updateInputAreaForCapture();
 
-    // Visually indicate loading
-    if (ocrIconContainer) ocrIconContainer.style.opacity = '0.5';
-
-    try {
-        const result = await core.invoke<CaptureResult>('capture_interactive_and_ocr');
-        console.log('Capture Result:', result);
-
-        currentOcrText = result.ocr_text;
-        currentImageBase64 = result.image_base64;
-        currentTempScreenshotPath = result.temp_path;
-
-        updateInputAreaForCapture(); // Update input tooltip and image preview
-
-        if (statusMessage) {
-            if (currentOcrText || currentImageBase64) {
-                statusMessage.textContent = 'Capture complete. OCR text added as tooltip to input.';
-                 // Auto-hide status after a delay
-                 setTimeout(() => {
-                    if (statusMessage && statusMessage.textContent === 'Capture complete. OCR text added as tooltip to input.') {
-                      statusMessage.style.display = 'none';
-                      statusMessage.textContent = '';
-                    }
-                  }, 4000);
-            } else {
-                statusMessage.textContent = 'Capture complete, but no image or text was processed.';
-            }
+    if (statusMessage) {
+      statusMessage.textContent = `Error: ${errorMessage}`;
+      // Auto-hide error after a delay
+      setTimeout(() => {
+        if (statusMessage && statusMessage.textContent === `Error: ${errorMessage}`) {
+          statusMessage.style.display = 'none';
+          statusMessage.textContent = '';
         }
-
-    } catch (error) {
-        console.error('Error during interactive capture/OCR:', error);
-        const errorMessage = typeof error === 'string' ? error : 'Capture cancelled or failed.';
-        // Clear any potentially partially set state
-        currentOcrText = null;
-        currentImageBase64 = null;
-        currentTempScreenshotPath = null; // Ensure path isn't left hanging on error
-        updateInputAreaForCapture();
-
-        if (statusMessage) {
-            statusMessage.textContent = `Error: ${errorMessage}`;
-             // Auto-hide error after a delay
-             setTimeout(() => {
-                if (statusMessage && statusMessage.textContent === `Error: ${errorMessage}`) {
-                  statusMessage.style.display = 'none';
-                  statusMessage.textContent = '';
-                }
-              }, 5000);
-        }
-    } finally {
-        // Re-enable icon
-         if (ocrIconContainer) ocrIconContainer.style.opacity = '1';
+      }, 5000);
     }
+  } finally {
+    // Re-enable icon
+    if (ocrIconContainer) ocrIconContainer.style.opacity = '1';
+  }
 }
 
 // --- Send Message Handler ---
 async function handleSendMessage() {
-    let userTypedText = messageInput.value.trim();
-    let textToSend = userTypedText;
-    let textToDisplay = userTypedText;
-    let tempPathToClean: string | null = null; // Hold path for cleanup *after* sending
+  let userTypedText = messageInput.value.trim();
+  let textToSend = userTypedText;
+  let textToDisplay = userTypedText;
+  let tempPathToClean: string | null = null; // Hold path for cleanup *after* sending
 
-    // Check if there's captured OCR text to prepend
-    if (currentOcrText) {
-        const formattedOcr = `\n OCR Text: ${currentOcrText}`;
-        textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
-        textToDisplay = textToSend; // Display the combined text
+  // Check if there's captured OCR text to prepend
+  if (currentOcrText) {
+    const formattedOcr = `\n OCR Text: ${currentOcrText}`;
+    textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
+    textToDisplay = textToSend; // Display the combined text
 
-        // Prepare state to be cleared AFTER successful send
-        tempPathToClean = currentTempScreenshotPath;
-        currentOcrText = null;
-        currentImageBase64 = null;
-        currentTempScreenshotPath = null;
-        // updateInputAreaForCapture(); // Clear preview/tooltip *after* send succeeds or fails
-    } else if (!userTypedText) {
-        console.log("handleSendMessage: No text typed and no captured OCR text.");
-        return; // Nothing to send
+    // Prepare state to be cleared AFTER successful send
+    tempPathToClean = currentTempScreenshotPath;
+    currentOcrText = null;
+    currentImageBase64 = null;
+    currentTempScreenshotPath = null;
+    // updateInputAreaForCapture(); // Clear preview/tooltip *after* send succeeds or fails
+  } else if (!userTypedText) {
+    console.log("handleSendMessage: No text typed and no captured OCR text.");
+    return; // Nothing to send
+  }
+
+  // Add user's current message to history right before sending
+  // This was previously done in addMessageToHistory, but to ensure the API call
+  // gets the absolute latest state including the current message, we adjust.
+  // However, addMessageToHistory ALREADY adds the user message to the visual chat
+  // and to chatMessageHistory. So, the history is up-to-date.
+
+  addMessageToHistory('You', textToDisplay); // This will also add it to chatMessageHistory
+
+  // Prepare messages for the backend
+  // The 'textToDisplay' is the most recent user message.
+  // chatMessageHistory already contains all prior messages, including the one just added by addMessageToHistory.
+  const messagesToSendToBackend = [...chatMessageHistory]; // MODIFIED: Use the updated chatMessageHistory
+
+  messageInput.value = ''; // Clear input field now
+  messageInput.disabled = true;
+  if (messageInput.title) messageInput.title = ''; // Clear tooltip immediately
+  messageInput.style.height = initialTextareaHeight; // Reset height
+  messageInput.style.overflowY = 'hidden'; // Hide scrollbar again
+  if (!inputImagePreview.classList.contains('hidden')) {
+    inputImagePreview.classList.add('hidden'); // Hide preview immediately
+    inputImagePreview.src = '';
+  }
+
+  // Show clear button if it was hidden
+  if (clearChatButton?.classList.contains('hidden')) {
+    clearChatButton.classList.remove('hidden');
+  }
+
+  // Show thinking indicator / initial placeholder for Shard's response
+  const assistantMessagePlaceholder = document.createElement('div');
+  assistantMessagePlaceholder.classList.add('message', 'assistant', 'streaming'); // New class for styling streamed message
+  const senderStrong = document.createElement('strong');
+  senderStrong.textContent = 'Shard';
+  assistantMessagePlaceholder.appendChild(senderStrong);
+
+  currentAssistantContentDiv = document.createElement('div'); // Create the content div
+  currentAssistantContentDiv.classList.add('message-content');
+  currentAssistantContentDiv.innerHTML = '<div class="dots-container"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>'; // Initial thinking dots
+  assistantMessagePlaceholder.appendChild(currentAssistantContentDiv);
+
+  currentAssistantMessageDiv = assistantMessagePlaceholder; // Store reference to the whole message
+
+  if (chatHistory) {
+    chatHistory.appendChild(assistantMessagePlaceholder);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+  }
+
+  try {
+    // Invoke send_text_to_model. It no longer directly returns the message content.
+    await core.invoke('send_text_to_model', { messages: messagesToSendToBackend, window: Window.getCurrent() }); // Pass the current window
+    console.log("send_text_to_model invoked. Waiting for stream events.");
+
+    // The rest of the logic (removeThinkingIndicator, addMessageToHistory for Shard)
+    // will now be handled by the STREAM_CHUNK, STREAM_END, and STREAM_ERROR event listeners.
+
+    // Cleanup temp file ONLY after successful command invocation (actual success is via stream)
+    if (tempPathToClean) {
+      console.log("Cleaning up temp screenshot after invoking send_text_to_model:", tempPathToClean);
+      invoke('cleanup_temp_screenshot', { path: tempPathToClean })
+        .catch(err => console.error("Error cleaning up temp screenshot post-invoke:", err));
     }
 
-    addMessageToHistory('You', textToDisplay);
-    messageInput.value = ''; // Clear input field now
-    messageInput.disabled = true;
-    if(messageInput.title) messageInput.title = ''; // Clear tooltip immediately
-    messageInput.style.height = initialTextareaHeight; // Reset height
-    messageInput.style.overflowY = 'hidden'; // Hide scrollbar again
-    if(!inputImagePreview.classList.contains('hidden')) {
-        inputImagePreview.classList.add('hidden'); // Hide preview immediately
-        inputImagePreview.src = '';
+  } catch (error) {
+    // This catch block handles errors from the invoke call itself (e.g., backend not reachable)
+    // Errors from the model generation will be handled by STREAM_ERROR listener.
+    console.error('Failed to invoke send_text_to_model:', error);
+    if (currentAssistantContentDiv) {
+      currentAssistantContentDiv.innerHTML = md.render(`Error invoking model: ${error}`);
+    } else {
+      // If even the placeholder wasn't created, add a new error message
+      addMessageToHistory('Shard', `Error invoking model: ${error}`);
+    }
+    if (currentAssistantMessageDiv) {
+      currentAssistantMessageDiv.classList.remove('streaming'); // Remove streaming class if error occurs here
+      currentAssistantMessageDiv.classList.add('error'); // Optional: add error class
     }
 
-    // Show clear button if it was hidden
-    if (clearChatButton?.classList.contains('hidden')) {
-        clearChatButton.classList.remove('hidden');
+
+    // Even on error, if we *tried* to send OCR text, attempt cleanup
+    if (tempPathToClean) {
+      console.warn("Cleaning up temp screenshot after failed invoke:", tempPathToClean);
+      invoke('cleanup_temp_screenshot', { path: tempPathToClean })
+        .catch(err => console.error("Error cleaning up temp screenshot post-failure:", err));
     }
-
-    // Show thinking indicator
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.classList.add('message', 'assistant', 'thinking');
-    thinkingDiv.innerHTML = `<strong>Shard</strong><div class="dots-container"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
-    if (chatHistory) {
-        chatHistory.appendChild(thinkingDiv);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
+  } finally {
+    // Re-enable input regardless of success/failure OF THE INVOKE CALL
+    // Actual message completion enables it in STREAM_END or STREAM_ERROR
+    if (messageInput) {
+      messageInput.disabled = false;
+      // messageInput.focus(); // Focus will be handled by stream end/error
     }
-
-    const removeThinkingIndicator = () => {
-        const thinkingMsg = chatHistory?.querySelector('.message.thinking');
-        if (thinkingMsg) {
-            chatHistory.removeChild(thinkingMsg);
-        }
-    };
-
-    try {
-        const response = await core.invoke<ModelResponse>('send_text_to_model', { text: textToSend });
-        removeThinkingIndicator();
-
-        // Check if chat was cleared while waiting for response
-        if (isChatCleared) {
-            console.log("Chat was cleared, discarding incoming model response.");
-            isChatCleared = false; // Reset flag
-            messageInput.disabled = false;
-            messageInput.focus();
-            return; // Don't add the message
-        }
-
-        addMessageToHistory('Shard', response.content, response.reasoning);
-
-        // Cleanup temp file ONLY after successful send
-        if (tempPathToClean) {
-            console.log("Cleaning up temp screenshot after successful send:", tempPathToClean);
-            invoke('cleanup_temp_screenshot', { path: tempPathToClean })
-                .catch(err => console.error("Error cleaning up temp screenshot post-send:", err));
-        }
-
-    } catch (error) {
-         removeThinkingIndicator();
-        let errorMessage = 'An error occurred.';
-        if (typeof error === 'string') {
-            errorMessage = error;
-        } else if (error instanceof Error) {
-            errorMessage = error.message;
-        }
-        console.error('Failed to send message:', error);
-        addMessageToHistory('Shard', `Error: ${errorMessage}`);
-
-        // Even on error, if we *tried* to send OCR text, attempt cleanup
-        if (tempPathToClean) {
-            console.warn("Cleaning up temp screenshot after failed send:", tempPathToClean);
-            invoke('cleanup_temp_screenshot', { path: tempPathToClean })
-                .catch(err => console.error("Error cleaning up temp screenshot post-failure:", err));
-        }
-    } finally {
-        // Re-enable input regardless of success/failure
-        if (messageInput) {
-            messageInput.disabled = false;
-            messageInput.focus();
-        }
-        // Ensure preview/tooltip are cleared in case they weren't before
-        updateInputAreaForCapture();
-    }
+    // Ensure preview/tooltip are cleared in case they weren't before
+    updateInputAreaForCapture();
+  }
 }
 
 // --- Event Listeners ---
+
+// Define interfaces for stream payloads
+interface StreamChunkPayload {
+  delta?: string | null;
+}
+interface StreamEndPayload {
+  full_content: string;
+  reasoning?: string | null;
+}
+interface StreamErrorPayload {
+  error: string;
+}
+
+let unlistenStreamChunk: (() => void) | null = null;
+let unlistenStreamEnd: (() => void) | null = null;
+let unlistenStreamError: (() => void) | null = null;
+
+// Buffer and flag for batched animation of stream chunks
+let streamDeltaBuffer = "";       // ADDED: Accumulates deltas
+let streamAnimationFrameRequested = false; // ADDED: Tracks if an animation frame is pending
+
+// ADDED: Configuration for sub-chunking large pieces of text
+const MAX_SUB_CHUNK_LENGTH = 70; // Characters per animated sub-chunk
+const SUB_CHUNK_ANIMATION_DELAY = 50; // Milliseconds delay between animating sub-chunks
+
+async function setupStreamListeners() {
+  if (unlistenStreamChunk) unlistenStreamChunk();
+  unlistenStreamChunk = await listen<StreamChunkPayload>('STREAM_CHUNK', (event) => {
+    if (event.payload.delta) {
+      streamDeltaBuffer += event.payload.delta;
+    }
+
+    if (!streamAnimationFrameRequested && currentAssistantContentDiv) {
+      streamAnimationFrameRequested = true;
+      requestAnimationFrame(() => {
+        if (!currentAssistantContentDiv) { // Double check in case it became null
+          streamAnimationFrameRequested = false;
+          streamDeltaBuffer = ""; // Clear buffer if no target
+          return;
+        }
+
+        const currentBatchText = streamDeltaBuffer;
+        streamDeltaBuffer = ""; // Clear buffer for next frame's network chunks
+        streamAnimationFrameRequested = false; // Reset flag for next frame
+
+        if (currentBatchText) {
+          if (currentAssistantContentDiv.innerHTML.includes('dots-container')) {
+            currentAssistantContentDiv.innerHTML = ''; // Clear thinking dots
+          }
+
+          // Function to animate text piece by piece
+          function animateTextSequentially(textToProcess: string) {
+            if (!textToProcess || !currentAssistantContentDiv) return;
+
+            const subChunk = textToProcess.substring(0, MAX_SUB_CHUNK_LENGTH);
+            const remainingText = textToProcess.substring(MAX_SUB_CHUNK_LENGTH);
+
+            const newSpan = document.createElement('span');
+            newSpan.innerHTML = md.renderInline(subChunk); // Render this piece
+            newSpan.style.opacity = '0';
+            newSpan.style.transition = 'opacity 0.3s ease-out';
+            currentAssistantContentDiv.appendChild(newSpan);
+
+            requestAnimationFrame(() => { // Fade in this piece
+              newSpan.style.opacity = '1';
+            });
+
+            if (chatHistory) {
+              chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+
+            if (remainingText) {
+              setTimeout(() => {
+                animateTextSequentially(remainingText);
+              }, SUB_CHUNK_ANIMATION_DELAY);
+            }
+          }
+          animateTextSequentially(currentBatchText); // Start processing the batch
+        }
+      });
+    } else if (!currentAssistantContentDiv && streamDeltaBuffer) {
+      console.warn("STREAM_CHUNK: currentAssistantContentDiv is null, but deltaBuffer has content:", streamDeltaBuffer);
+      streamDeltaBuffer = "";
+      streamAnimationFrameRequested = false;
+    }
+  });
+
+  if (unlistenStreamEnd) unlistenStreamEnd();
+  unlistenStreamEnd = await listen<StreamEndPayload>('STREAM_END', (event) => {
+    console.log('STREAM_END received:', event.payload);
+    if (currentAssistantMessageDiv && currentAssistantContentDiv) {
+      currentAssistantContentDiv.innerHTML = md.render(event.payload.full_content); // Final render
+      currentAssistantMessageDiv.classList.remove('streaming');
+
+      // Add reasoning if present
+      if (event.payload.reasoning) {
+        const details = document.createElement('details');
+        details.classList.add('reasoning-accordion');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Show Reasoning';
+        details.appendChild(summary);
+        const reasoningContentEl = document.createElement('div');
+        reasoningContentEl.classList.add('reasoning-content');
+        const pre = document.createElement('pre');
+        pre.textContent = event.payload.reasoning;
+        reasoningContentEl.appendChild(pre);
+        details.appendChild(reasoningContentEl);
+        currentAssistantMessageDiv.appendChild(details);
+      }
+
+      // Update chatMessageHistory with the complete message
+      const existingEntryIndex = chatMessageHistory.findIndex(msg => msg.role === 'assistant' && msg.content === "Thinking..."); // Placeholder text if used
+      if (existingEntryIndex > -1) {
+        chatMessageHistory[existingEntryIndex].content = event.payload.full_content;
+      } else {
+        // If no placeholder was there (e.g. direct error), or to be safe, push a new one.
+        // However, the placeholder should be handled by the currentAssistantMessageDiv logic.
+        // The main purpose here is to ensure the history array has the final content.
+        // Let's refine the logic for adding to chatMessageHistory:
+        // The 'addMessageToHistory' function itself is not ideal for streaming placeholders.
+        // We should add to chatMessageHistory here, at the END.
+        chatMessageHistory.push({ role: 'assistant', content: event.payload.full_content });
+      }
+
+
+    }
+    if (messageInput) {
+      messageInput.disabled = false;
+      messageInput.focus();
+    }
+    currentAssistantMessageDiv = null;
+    currentAssistantContentDiv = null;
+    if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+  });
+
+  if (unlistenStreamError) unlistenStreamError();
+  unlistenStreamError = await listen<StreamErrorPayload>('STREAM_ERROR', (event) => {
+    console.error('STREAM_ERROR received:', event.payload);
+    if (currentAssistantMessageDiv && currentAssistantContentDiv) {
+      currentAssistantContentDiv.innerHTML = md.render(`Error: ${event.payload.error}`);
+      currentAssistantMessageDiv.classList.remove('streaming');
+      currentAssistantMessageDiv.classList.add('error'); // Optional: add error class for styling
+    } else {
+      // If no placeholder, add a new message for the error
+      addMessageToHistory('Shard', `Error: ${event.payload.error}`);
+    }
+    if (messageInput) {
+      messageInput.disabled = false;
+      messageInput.focus();
+    }
+    currentAssistantMessageDiv = null;
+    currentAssistantContentDiv = null;
+  });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   loadInitialSettings();
+  setupStreamListeners(); // ADDED: Setup listeners on DOM load
 
   if (apiKeyInput) {
     // Add input event listener with debounce for auto-saving

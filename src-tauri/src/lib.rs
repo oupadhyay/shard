@@ -9,7 +9,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::PhysicalPosition;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent}; // Added Emitter
+use tauri::{AppHandle, Emitter, Manager, WindowEvent, Window}; // Added Emitter and Window
 use tauri_plugin_global_shortcut::{
     self as tauri_gs, GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState,
 };
@@ -84,40 +84,25 @@ fn save_config(app_handle: &AppHandle, config: &AppConfig) -> Result<(), String>
 }
 
 // Request Structures
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct ChatMessage {
     role: String,
     content: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
+    stream: Option<bool>,
 }
 
 // Response Structures
-#[derive(Deserialize, Debug)]
-struct ChoiceMessage {
-    content: String,
-    reasoning: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct Choice {
-    message: ChoiceMessage,
-}
-
 // Define a structure to return both content and reasoning
 #[derive(Serialize, Deserialize, Debug)]
 struct ModelResponse {
     content: String,
     reasoning: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ChatCompletionResponse {
-    choices: Vec<Choice>,
 }
 
 // --- Gemini API Structures ---
@@ -132,11 +117,32 @@ struct GeminiContent {
     role: Option<String>, // Optional: "user" or "model"
 }
 
+// ADDED: Structures for GenerationConfig and ThinkingConfig for Gemini
+#[derive(Serialize, Debug, Clone, Default)]
+struct ThinkingConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_thoughts: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<i32>,
+}
+
+#[derive(Serialize, Debug, Default, Clone)]
+struct GenerationConfigForGemini {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<ThinkingConfig>,
+    // In the future, other fields like temperature, maxOutputTokens can be added here
+    // For example:
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // temperature: Option<f32>,
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // max_output_tokens: Option<i32>,
+}
+
 #[derive(Serialize, Debug)]
 struct GeminiChatCompletionRequest {
     contents: Vec<GeminiContent>,
-    // generation_config: Option<serde_json::Value>, // For more control
-    // safety_settings: Option<serde_json::Value>,   // For safety settings
+    #[serde(skip_serializing_if = "Option::is_none")] // ADDED
+    generation_config: Option<GenerationConfigForGemini>, // ADDED
 }
 
 #[derive(Deserialize, Debug)]
@@ -150,6 +156,45 @@ struct GeminiCandidate {
 struct GeminiChatCompletionResponse {
     candidates: Vec<GeminiCandidate>,
     // prompt_feedback: Option<serde_json::Value>,
+}
+
+// Structures for streaming OpenRouter events (OpenAI compatible)
+#[derive(Serialize, Deserialize, Debug, Clone)] // Clone for emitting
+struct StreamChoiceDelta {
+    content: Option<String>, // Content is optional as some chunks might not have it
+    role: Option<String>, // Role might appear in first chunk
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)] // Clone for emitting
+struct StreamChoice {
+    delta: StreamChoiceDelta,
+    finish_reason: Option<String>,
+    index: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)] // Clone for emitting
+struct StreamingChatCompletionResponse {
+    id: String,
+    object: String,
+    created: i64,
+    model: String,
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Serialize, Clone)] // ADDED - Payload for STREAM_CHUNK event
+struct StreamChunkPayload {
+    delta: Option<String>,
+}
+
+#[derive(Serialize, Clone)] // ADDED - Payload for STREAM_END event
+struct StreamEndPayload {
+    full_content: String,
+    reasoning: Option<String>, // Or whatever final data you want to send
+}
+
+#[derive(Serialize, Clone)] // ADDED - Payload for STREAM_ERROR event
+struct StreamErrorPayload {
+    error: String,
 }
 
 // --- Screen Capture & OCR Helper Functions ---
@@ -469,7 +514,11 @@ fn cleanup_temp_screenshot(path: String) -> Result<(), String> {
 
 // --- Other Tauri Commands (send_text_to_model, get_api_key, etc.) should remain the same ---
 #[tauri::command]
-async fn send_text_to_model(text: String, app_handle: AppHandle) -> Result<ModelResponse, String> {
+async fn send_text_to_model(
+    messages: Vec<ChatMessage>,
+    app_handle: AppHandle,
+    window: Window,
+) -> Result<(), String> {
     let config = load_config(&app_handle)?;
 
     let model_name = config.selected_model.clone().unwrap_or_else(|| {
@@ -494,10 +543,17 @@ async fn send_text_to_model(text: String, app_handle: AppHandle) -> Result<Model
             }
         };
         log::info!("Using Gemini API for model: {}", model_name);
-        // The Gemini model name might be just "gemini-1.5-flash-latest" from the select,
-        // but the API might expect "models/gemini-1.5-flash-latest".
-        // For now, let's assume the model_name is directly usable or adjust in call_gemini_api if needed.
-        call_gemini_api(text, gemini_api_key, model_name.replace("google/", "")).await // Pass the raw model name
+
+        // TODO: Implement streaming for Gemini API. For now, it will error or not stream.
+        // For simplicity in this step, we'll let Gemini calls potentially fail or return non-streamed if they don't support it yet.
+        // A proper implementation would require call_gemini_api to also accept window and stream.
+        match call_gemini_api(messages, gemini_api_key, model_name.replace("google/", ""), window.clone()).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
+                Err(e)
+            }
+        }
     } else {
         // Fallback to OpenRouter for other models
         let api_key = match config.api_key {
@@ -514,7 +570,13 @@ async fn send_text_to_model(text: String, app_handle: AppHandle) -> Result<Model
             model_name,
             DEFAULT_MODEL
         );
-        call_openrouter_api(text, api_key, model_name).await
+        match call_openrouter_api(messages, api_key, model_name, window.clone()).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
+                Err(e)
+            }
+        }
     }
 }
 
@@ -550,9 +612,9 @@ async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result
     let allowed_models = vec![
         "deepseek/deepseek-chat-v3-0324:free",
         "deepseek/deepseek-r1:free",
-        "gemini-2.0-flash", // Added Gemini models
+        "gemini-2.0-flash",
         "gemini-2.5-flash-preview-04-17",
-        "gemini-2.5-pro-preview-05-06"
+        "gemini-2.5-flash-preview-04-17#thinking-enabled"
     ];
     // Updated check to be more specific
     if !allowed_models.contains(&model_name.as_str()) {
@@ -592,151 +654,272 @@ async fn set_gemini_api_key(key: String, app_handle: AppHandle) -> Result<(), St
 
 // --- API Call Logic ---
 async fn call_gemini_api(
-    user_text: String,
+    messages: Vec<ChatMessage>,
     api_key: String,
-    model_name: String,
-) -> Result<ModelResponse, String> {
+    model_identifier_from_config: String, // RENAMED for clarity
+    window: Window,
+) -> Result<(), String> {
     let client = reqwest::Client::new();
-    // Use :generateContent for non-streaming
+
+    // MODIFIED: Logic to handle model identifier and generation_config
+    let mut actual_model_name_for_api = model_identifier_from_config.clone();
+    let mut gen_config: Option<GenerationConfigForGemini> = None;
+
+    if model_identifier_from_config == "gemini-2.5-flash-preview-04-17" {
+        // This is the "Gemini 2.5 Flash" (non-thinking explicit budget 0)
+        gen_config = Some(GenerationConfigForGemini {
+            thinking_config: Some(ThinkingConfig {
+                include_thoughts: None, // Let API decide default or if it's implied by budget
+                thinking_budget: Some(0),
+            }),
+            // ..Default::default() // for other potential future fields in GenerationConfigForGemini
+        });
+        // actual_model_name_for_api is already correct
+    } else if model_identifier_from_config == "gemini-2.5-flash-preview-04-17#thinking-enabled" {
+        // This is "Gemini 2.5 Flash (Thinking)" (default thinking, no specific budget)
+        actual_model_name_for_api = "gemini-2.5-flash-preview-04-17".to_string(); // Use base model name for API
+        gen_config = Some(GenerationConfigForGemini {
+            thinking_config: None, // No specific thinking_config, so model uses its defaults.
+            // This means neither include_thoughts nor thinking_budget will be sent.
+            // ..Default::default()
+        });
+    }
+    // For other gemini models, gen_config remains None, and no specific generation_config will be sent.
+
     let api_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        model_name,
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}&alt=sse",
+        actual_model_name_for_api, // Use the potentially modified model name
         api_key
     );
 
     let request_payload = GeminiChatCompletionRequest {
-        contents: vec![GeminiContent {
-            parts: vec![GeminiPart { text: user_text }],
-            role: Some("user".to_string()), // Gemini API typically requires a role for 'contents'
-        }],
+        contents: messages.into_iter().map(|msg| {
+            let role_for_gemini = if msg.role == "assistant" {
+                "model".to_string()
+            } else {
+                msg.role // Assuming it's "user"
+            };
+            GeminiContent {
+                parts: vec![GeminiPart { text: msg.content }],
+                role: Some(role_for_gemini),
+            }
+        }).collect(),
+        generation_config: gen_config, // Set the generation_config
     };
 
-    log::info!("Sending request to Gemini API for model: {}", model_name);
+    log::info!(
+        "Sending STREAMING request to Gemini API for model: {} (API model: {}). Payload: {:?}",
+        model_identifier_from_config, actual_model_name_for_api, request_payload
+    );
 
-    match client.post(&api_url)
+    let response_result = client.post(&api_url)
         .header("Content-Type", "application/json")
         .json(&request_payload)
         .send()
-        .await
-    {
+        .await;
+
+    match response_result {
         Ok(response) => {
-            let response_status = response.status();
-            let response_text = response.text().await.map_err(|e| {
-                log::error!("Failed to read Gemini API response text: {}", e);
-                format!("Failed to read Gemini API response text: {}", e)
-            })?;
+            if response.status().is_success() {
+                use futures_util::StreamExt;
+                let mut stream = response.bytes_stream();
+                let mut accumulated_content = String::new();
+                let mut line_buffer = String::new(); // To handle multi-byte UTF-8 chars split across chunks
 
-            log::debug!(
-                "Gemini API response status: {}. Body: {}",
-                response_status,
-                response_text
-            );
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(chunk_bytes) => {
+                            match std::str::from_utf8(&chunk_bytes) {
+                                Ok(chunk_str) => {
+                                    line_buffer.push_str(chunk_str);
 
-            if response_status.is_success() {
-                match serde_json::from_str::<GeminiChatCompletionResponse>(&response_text) {
-                    Ok(gemini_response) => {
-                        if let Some(candidate) = gemini_response.candidates.get(0) {
-                            if let Some(part) = candidate.content.parts.get(0) {
-                                Ok(ModelResponse {
-                                    content: part.text.clone(),
-                                    reasoning: None, // Gemini API doesn't typically provide a separate reasoning field
-                                })
-                            } else {
-                                log::error!("Gemini response: Candidate content has no parts.");
-                                Err("Gemini response processing error: No content parts".to_string())
+                                    // Process complete lines from the buffer
+                                    while let Some(newline_pos) = line_buffer.find("\n") {
+                                        let line = line_buffer.drain(..newline_pos + 1).collect::<String>();
+                                        let trimmed_line = line.trim();
+
+                                        if trimmed_line.starts_with("data: ") {
+                                            let data_json_str = &trimmed_line[6..]; // Skip "data: "
+                                            // Gemini stream might send an array of responses, often with one element.
+                                            // And sometimes it sends a single JSON object directly.
+                                            // We need to handle both cases.
+                                            // The API doc (and community post) suggests each SSE event is one JSON object representing a GeminiChatCompletionResponse.
+
+                                            // Attempt to parse as a single GeminiChatCompletionResponse
+                                            match serde_json::from_str::<GeminiChatCompletionResponse>(data_json_str) {
+                                                Ok(gemini_response_chunk) => {
+                                                    if let Some(candidate) = gemini_response_chunk.candidates.get(0) {
+                                                        if let Some(part) = candidate.content.parts.get(0) {
+                                                            let delta = &part.text;
+                                                            accumulated_content.push_str(delta);
+                                                            if let Err(e) = window.emit("STREAM_CHUNK", StreamChunkPayload { delta: Some(delta.clone()) }) {
+                                                                log::error!("Failed to emit STREAM_CHUNK for Gemini: {}", e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    // It might be an array of these objects, though less common for pure SSE streams.
+                                                    // The official docs for streamGenerateContent show each event as *one* GenerateContentResponse.
+                                                    // So, if direct parsing fails, it's likely an error or an unexpected format.
+                                                    if !data_json_str.is_empty() && data_json_str != "[" && data_json_str != "]" { // Avoid logging for simple array brackets if they appear alone.
+                                                        log::warn!(
+                                                            "Failed to parse Gemini stream data JSON as single object: {}. Raw: '{}'",
+                                                            e,
+                                                            data_json_str
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        } else if !trimmed_line.is_empty() {
+                                            // Log unexpected non-empty lines that don't start with "data: "
+                                            log::warn!("Unexpected line in Gemini stream: {}", trimmed_line);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Gemini stream chunk not valid UTF-8: {}", e);
+                                    let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Gemini stream chunk not valid UTF-8: {}", e) });
+                                    return Err(format!("Gemini stream chunk not valid UTF-8: {}", e));
+                                }
                             }
-                        } else {
-                            log::error!("Gemini response contained no candidates.");
-                            Err("No candidates received from Gemini model".to_string())
+                        }
+                        Err(e) => {
+                            log::error!("Error receiving stream chunk from Gemini: {}", e);
+                            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Error in Gemini stream: {}", e) });
+                            return Err(format!("Error receiving Gemini stream chunk: {}", e));
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to parse Gemini JSON response: {}", e);
-                        log::error!("Raw Gemini JSON causing parse error: {}", response_text);
-                        Err(format!("Failed to parse Gemini response JSON: {}", e))
-                    }
                 }
+                // Stream ended
+                log::info!("Gemini stream finished. Accumulated content: {}", accumulated_content);
+                let _ = window.emit("STREAM_END", StreamEndPayload {
+                    full_content: accumulated_content.clone(),
+                    reasoning: None, // Gemini API doesn't typically provide separate reasoning field in this way
+                });
+                Ok(())
             } else {
+                let status = response.status();
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body from Gemini".to_string());
                 log::error!(
-                    "Gemini API request failed with status {}: {}",
-                    response_status,
-                    response_text
+                    "Gemini API (streaming) request failed with status {}: {}",
+                    status,
+                    error_text
                 );
-                Err(format!(
-                    "Gemini API request failed: {} - {}",
-                    response_status,
-                    response_text
-                ))
+                let err_msg = format!("Gemini API (streaming) request failed: {} - {}", status, error_text);
+                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+                Err(err_msg)
             }
         }
         Err(e) => {
-            log::error!("Network request to Gemini API failed: {}", e);
-            Err(format!("Gemini API network request failed: {}", e))
+            log::error!("Network request to Gemini API (streaming) failed: {}", e);
+            let err_msg = format!("Gemini API (streaming) network request failed: {}", e);
+            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+            Err(err_msg)
         }
     }
 }
 
 async fn call_openrouter_api(
-    user_text: String,
+    messages: Vec<ChatMessage>,
     api_key: String,
     model_name: String,
-) -> Result<ModelResponse, String> {
+    window: Window,
+) -> Result<(), String> {
     let client = reqwest::Client::new();
     let api_url = "https://openrouter.ai/api/v1/chat/completions";
     let request_payload = ChatCompletionRequest {
         model: model_name.clone(),
-        messages: vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: "You are a helpful assistant.".to_string(),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: user_text,
-            },
-        ],
+        messages: messages.clone(),
+        stream: Some(true),
     };
-    log::info!("Sending request to OpenRouter for model: {}", model_name);
-    match client
+    log::info!("Sending streaming request to OpenRouter for model: {}", model_name);
+
+    let response_result = client
         .post(api_url)
         .bearer_auth(api_key)
         .header("HTTP-Referer", "http://localhost")
         .header("X-Title", "Shard")
         .json(&request_payload)
         .send()
-        .await
-    {
+        .await;
+
+    match response_result {
         Ok(response) => {
             if response.status().is_success() {
-                match response.text().await {
-                    Ok(raw_json_text) => {
-                        log::debug!("Raw JSON response from OpenRouter: {}", raw_json_text);
-                        match serde_json::from_str::<ChatCompletionResponse>(&raw_json_text) {
-                            Ok(chat_response) => {
-                                if let Some(choice) = chat_response.choices.get(0) {
-                                    Ok(ModelResponse {
-                                        content: choice.message.content.clone(),
-                                        reasoning: choice.message.reasoning.clone(),
-                                    })
-                                } else {
-                                    log::error!(
-                                        "OpenRouter response contained no choices after parsing."
-                                    );
-                                    Err("No response choices received from model".to_string())
+                use futures_util::StreamExt; // Import for .next()
+                let mut stream = response.bytes_stream();
+                let mut accumulated_content = String::new();
+                let mut line_buffer = String::new();
+
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(chunk_bytes) => {
+                            match std::str::from_utf8(&chunk_bytes) {
+                                Ok(chunk_str) => {
+                                    line_buffer.push_str(chunk_str);
+
+                                    // Process complete lines from the buffer
+                                    while let Some(newline_pos) = line_buffer.find("\n") {
+                                        let line = line_buffer.drain(..newline_pos + 1).collect::<String>();
+                                        let trimmed_line = line.trim();
+
+                                        if trimmed_line.starts_with("data: ") {
+                                            let data_json_str = &trimmed_line[6..];
+                                            if data_json_str == "[DONE]" {
+                                                log::info!("OpenRouter stream [DONE] received.");
+                                                let _ = window.emit("STREAM_END", StreamEndPayload {
+                                                    full_content: accumulated_content.clone(),
+                                                    reasoning: None, // TODO: Capture reasoning if available post-stream or via other means
+                                                });
+                                                return Ok(()); // Successfully finished streaming
+                                            }
+                                            match serde_json::from_str::<StreamingChatCompletionResponse>(data_json_str) {
+                                                Ok(parsed_chunk) => {
+                                                    if let Some(choice) = parsed_chunk.choices.get(0) {
+                                                        if let Some(content_delta) = &choice.delta.content {
+                                                            accumulated_content.push_str(content_delta);
+                                                            if let Err(e) = window.emit("STREAM_CHUNK", StreamChunkPayload { delta: Some(content_delta.clone()) }) {
+                                                                log::error!("Failed to emit STREAM_CHUNK: {}", e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    // Ignore lines that are not valid JSON data chunks, could be comments or empty lines
+                                                    if !data_json_str.is_empty() && !data_json_str.starts_with(":") {
+                                                        log::warn!("Failed to parse stream data JSON from OpenRouter: '{}'. Raw: '{}'", e, data_json_str);
+                                                    }
+                                                }
+                                            }
+                                        } else if !trimmed_line.is_empty() && !trimmed_line.starts_with(":") {
+                                            // Log unexpected non-empty, non-comment lines
+                                            log::warn!("Unexpected line in OpenRouter stream: {}", trimmed_line);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Stream chunk not valid UTF-8: {}", e);
+                                    let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Stream chunk not valid UTF-8: {}", e) });
+                                    return Err(format!("Stream chunk not valid UTF-8: {}", e));
                                 }
                             }
-                            Err(e) => {
-                                log::error!("Failed to parse JSON (from_str): {}", e);
-                                log::error!("Raw JSON causing parse error: {}", raw_json_text);
-                                Err(format!("Failed to parse response JSON: {}", e))
-                            }
+                        }
+                        Err(e) => {
+                            log::error!("Error receiving stream chunk from OpenRouter: {}", e);
+                            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Error in stream: {}", e) });
+                            return Err(format!("Error receiving stream chunk: {}", e));
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to read response text: {}", e);
-                        Err(format!("Failed to read response text: {}", e))
-                    }
                 }
+                // If loop finishes without [DONE], it might be an incomplete stream or an issue.
+                // Emit an error or handle as appropriate. For now, assume [DONE] is the primary exit.
+                log::warn!("OpenRouter stream ended without [DONE] marker.");
+                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: "Stream ended without [DONE] marker".to_string() });
+                Err("Stream ended without [DONE] marker".to_string())
             } else {
                 let status = response.status();
                 let error_text = response
@@ -748,12 +931,16 @@ async fn call_openrouter_api(
                     status,
                     error_text
                 );
-                Err(format!("API request failed: {} - {}", status, error_text))
+                let err_msg = format!("API request failed: {} - {}", status, error_text);
+                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+                Err(err_msg)
             }
         }
         Err(e) => {
             log::error!("Network request to OpenRouter failed: {}", e);
-            Err(format!("Network request failed: {}", e))
+            let err_msg = format!("Network request failed: {}", e);
+            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+            Err(err_msg)
         }
     }
 }

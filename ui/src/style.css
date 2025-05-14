@@ -162,12 +162,31 @@ body {
   background-color: rgba(75, 75, 75, 0.9);
 }
 
-.message strong {
+.message > strong {
     display: block;
     margin-bottom: 4px;
     font-weight: 600;
     font-size: 0.9em; /* Adjusted size */
     color: rgba(255, 255, 255, 0.7); /* Brighter label */
+}
+
+/* ADDED: Styling for the main message content area */
+.message .message-content {
+  overflow-x: auto; /* Allow horizontal scrolling for wide content like KaTeX */
+  padding-bottom: 5px; /* Add some padding if scrollbar appears, looks a bit better */
+}
+
+/* MODIFIED: Styles for list indentation within messages, using .message-content */
+.message .message-content ul,
+.message .message-content ol {
+  padding-left: 25px; /* Adjust as needed for deeper indent */
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.message .message-content li {
+  margin-bottom: 4px;
+  list-style-position: outside; /* Ensure bullets/numbers are outside the text flow */
 }
 
 /* Input Area */

@@ -10,10 +10,10 @@ A Tauri application for screen interaction with AI models.
 *   **Screen Capture + OCR Analysis** (Requires Tesseract)
 *   Markdown Rendering (0.3.0 and after)
 *   LaTeX Rendering (0.3.0 and after)
+*   Streaming Responses (0.3.1 and after)
 
 ### In Progress Features
 
-*   Streaming Responses (Building 0.3.1 🛠️)
 *   Copy to Clipboard (Idea 0.3.2 💡)
 
 ## IMPORTANT: Prerequisites

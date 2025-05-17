@@ -23,6 +23,9 @@ use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin i
 // Default model if none is selected
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 
+// --- System Instruction ---
+const SYSTEM_INSTRUCTION: &str = "You carefully provide accurate, concise, factual answers.\n  - Be concise. Minimize any other prose.\n  - If you think there might not be a correct answer, you say so. If you do not know the answer, say so instead of guessing.";
+
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 struct AppConfig {
@@ -92,6 +95,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_reasoning: Option<bool>,
 }
 
 // Response Structures
@@ -160,6 +165,8 @@ struct GeminiChatCompletionResponse {
 struct StreamChoiceDelta {
     content: Option<String>, // Content is optional as some chunks might not have it
     role: Option<String>, // Role might appear in first chunk
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Clone for emitting
@@ -516,6 +523,14 @@ async fn send_text_to_model(
     app_handle: AppHandle,
     window: Window,
 ) -> Result<(), String> {
+    // Create a new message list, starting with the system instruction.
+    let mut final_messages = Vec::new();
+    final_messages.push(ChatMessage {
+        role: "system".to_string(), // This role will be adapted by call_gemini_api
+        content: SYSTEM_INSTRUCTION.to_string(),
+    });
+    final_messages.extend(messages.into_iter()); // Append original messages
+
     let config = load_config(&app_handle)?;
 
     let model_name = config.selected_model.clone().unwrap_or_else(|| {
@@ -541,7 +556,7 @@ async fn send_text_to_model(
         };
         log::info!("Using Gemini API for model: {}", model_name);
 
-        match call_gemini_api(messages, gemini_api_key, model_name.replace("google/", ""), window.clone()).await {
+        match call_gemini_api(final_messages, gemini_api_key, model_name.replace("google/", ""), window.clone()).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
@@ -564,7 +579,7 @@ async fn send_text_to_model(
             model_name,
             DEFAULT_MODEL
         );
-        match call_openrouter_api(messages, api_key, model_name, window.clone()).await {
+        match call_openrouter_api(final_messages, api_key, model_name, window.clone()).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
@@ -690,7 +705,9 @@ async fn call_gemini_api(
         contents: messages.into_iter().map(|msg| {
             let role_for_gemini = if msg.role == "assistant" {
                 "model".to_string()
-            } else {
+            } else if msg.role == "system" { // Our prepended system instruction
+                "user".to_string() // Gemini handles system prompts as initial "user" messages
+            } else { // "user" (from human actual input)
                 msg.role // Assuming it's "user"
             };
             GeminiContent {
@@ -825,12 +842,20 @@ async fn call_openrouter_api(
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     let api_url = "https://openrouter.ai/api/v1/chat/completions";
-    let request_payload = ChatCompletionRequest {
+    let mut request_payload = ChatCompletionRequest {
         model: model_name.clone(),
         messages: messages.clone(),
         stream: Some(true),
+        include_reasoning: None,
     };
-    log::info!("Sending streaming request to OpenRouter for model: {}", model_name);
+
+    // Enable reasoning for DeepSeek R1 models
+    if model_name.starts_with("deepseek/deepseek-r1") {
+        log::info!("Enabling 'include_reasoning' for DeepSeek R1 model: {}", model_name);
+        request_payload.include_reasoning = Some(true);
+    }
+
+    log::info!("Sending streaming request to OpenRouter for model: {}. Payload: {:?}", model_name, request_payload);
 
     let response_result = client
         .post(api_url)
@@ -847,6 +872,7 @@ async fn call_openrouter_api(
                 use futures_util::StreamExt; // Import for .next()
                 let mut stream = response.bytes_stream();
                 let mut accumulated_content = String::new();
+                let mut accumulated_reasoning = String::new();
                 let mut line_buffer = String::new();
 
                 while let Some(item) = stream.next().await {
@@ -865,9 +891,10 @@ async fn call_openrouter_api(
                                             let data_json_str = &trimmed_line[6..];
                                             if data_json_str == "[DONE]" {
                                                 log::info!("OpenRouter stream [DONE] received.");
+                                                let final_reasoning = if accumulated_reasoning.is_empty() { None } else { Some(accumulated_reasoning) };
                                                 let _ = window.emit("STREAM_END", StreamEndPayload {
                                                     full_content: accumulated_content.clone(),
-                                                    reasoning: None, // TODO: Capture reasoning if available post-stream or via other means
+                                                    reasoning: final_reasoning,
                                                 });
                                                 return Ok(()); // Successfully finished streaming
                                             }
@@ -878,6 +905,13 @@ async fn call_openrouter_api(
                                                             accumulated_content.push_str(content_delta);
                                                             if let Err(e) = window.emit("STREAM_CHUNK", StreamChunkPayload { delta: Some(content_delta.clone()) }) {
                                                                 log::error!("Failed to emit STREAM_CHUNK: {}", e);
+                                                            }
+                                                        }
+                                                        // Capture reasoning delta if present
+                                                        if let Some(reasoning_delta) = &choice.delta.reasoning {
+                                                            if !reasoning_delta.is_empty() {
+                                                                log::debug!("Received reasoning delta for OpenRouter: '{}'", reasoning_delta);
+                                                                accumulated_reasoning.push_str(reasoning_delta);
                                                             }
                                                         }
                                                     }

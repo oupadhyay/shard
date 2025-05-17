@@ -69,6 +69,11 @@ interface ChatMessage {
   content: string;
 }
 
+// --- System Instruction (matches backend) ---
+const SYSTEM_INSTRUCTION: string = `You carefully provide accurate, concise, factual answers.
+  - Be concise. Minimize any other prose.
+  - If you think there might not be a correct answer, you say so. If you do not know the answer, say so instead of guessing.`;
+
 // --- Constants for History Management ---
 const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
 
@@ -204,6 +209,26 @@ function addMessageToHistory(sender: 'You' | 'Shard', content: string, reasoning
   if (sender === 'Shard') {
     currentAssistantMessageDiv = messageDiv; // Store the whole message div
     currentAssistantContentDiv = contentDiv; // Store the content div specifically for updates
+  }
+
+  // ADDED: Check if this is the first USER message to show System Prompt
+  if (sender === 'You' && chatMessageHistory.length === 0) {
+    const details = document.createElement('details');
+    details.classList.add('reasoning-accordion'); // Reuse existing style
+    details.style.marginTop = '10px'; // Add some space above the accordion
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'Show System Prompt';
+    details.appendChild(summary);
+
+    const promptContent = document.createElement('div');
+    promptContent.classList.add('reasoning-content'); // Reuse existing style
+    const pre = document.createElement('pre');
+    pre.textContent = SYSTEM_INSTRUCTION;
+    promptContent.appendChild(pre);
+
+    details.appendChild(promptContent);
+    messageDiv.appendChild(details); // Append to the user's message div
   }
 
   // Add to chatMessageHistory AFTER it's been decided what to display

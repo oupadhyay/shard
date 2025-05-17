@@ -1,6 +1,6 @@
 # Shard
 
-A Tauri application for screen interaction with AI models.
+A Tauri application for easy interaction with AI models.
 
 ## Completed Features
 
@@ -12,10 +12,12 @@ A Tauri application for screen interaction with AI models.
 *   LaTeX Rendering (0.3.0 and after)
 *   Streaming Responses (0.3.1 and after)
 *   Background Mode (0.3.2 and [MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
+*   System Prompt (0.4.0 and after)
+*   Reasoning for R1 (0.4.0 and after)
 
 ### In Progress Features
 
-*   Copy to Clipboard (Ideation 💡)
+*   Copy to Clipboard (Idea 0.4.1 💡)
 
 ## IMPORTANT: Prerequisites
 
@@ -80,25 +82,3 @@ This will generate installers/packages in the `src-tauri/target/release/bundle/`
 ## License
 
 This project is licensed under the MIT License.
-
-**MIT License**
-
-Copyright (c) [2025] [Ojasw Upadhyay]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

@@ -90,6 +90,17 @@ let currentTempScreenshotPath: string | null = null;
 let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold the div of the assistant's message being streamed
 let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
 
+// --- Helper function to preprocess LaTeX delimiters ---
+function preprocessLatex(content: string): string {
+  // Replace \( ... \) with $ ... $
+  content = content.replace(/\\\(/g, '$');
+  content = content.replace(/\\\)/g, '$');
+  // Replace \[ ... \] with $$ ... $$
+  content = content.replace(/\\\[/g, '$$');
+  content = content.replace(/\\\]/g, '$$');
+  return content;
+}
+
 // --- Populate Model Select Dropdown ---
 function populateModelSelect() {
   if (!modelSelect) return;
@@ -197,7 +208,7 @@ function addMessageToHistory(sender: 'You' | 'Shard', content: string, reasoning
   const contentDiv = document.createElement('div');
   contentDiv.classList.add('message-content');
   try {
-    contentDiv.innerHTML = md.render(content); // Render complete content
+    contentDiv.innerHTML = md.render(preprocessLatex(content)); // Render complete content with preprocessing
   } catch (e) {
     console.error("Error parsing markdown/katex:", e);
     contentDiv.textContent = content; // Fallback to text if parsing fails
@@ -477,7 +488,7 @@ async function handleSendMessage() {
     // Errors from the model generation will be handled by STREAM_ERROR listener.
     console.error('Failed to invoke send_text_to_model:', error);
     if (currentAssistantContentDiv) {
-      currentAssistantContentDiv.innerHTML = md.render(`Error invoking model: ${error}`);
+      currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(`Error invoking model: ${error}`));
     } else {
       // If even the placeholder wasn't created, add a new error message
       addMessageToHistory('Shard', `Error invoking model: ${error}`);
@@ -565,7 +576,7 @@ async function setupStreamListeners() {
             const remainingText = textToProcess.substring(MAX_SUB_CHUNK_LENGTH);
 
             const newSpan = document.createElement('span');
-            newSpan.innerHTML = md.renderInline(subChunk); // Render this piece
+            newSpan.innerHTML = md.renderInline(preprocessLatex(subChunk)); // Render this piece with preprocessing
             newSpan.style.opacity = '0';
             newSpan.style.transition = 'opacity 0.3s ease-out';
             currentAssistantContentDiv.appendChild(newSpan);
@@ -598,7 +609,7 @@ async function setupStreamListeners() {
   unlistenStreamEnd = await listen<StreamEndPayload>('STREAM_END', (event) => {
     console.log('STREAM_END received:', event.payload);
     if (currentAssistantMessageDiv && currentAssistantContentDiv) {
-      currentAssistantContentDiv.innerHTML = md.render(event.payload.full_content); // Final render
+      currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content)); // Final render with preprocessing
       currentAssistantMessageDiv.classList.remove('streaming');
 
       // Add reasoning if present
@@ -646,7 +657,7 @@ async function setupStreamListeners() {
   unlistenStreamError = await listen<StreamErrorPayload>('STREAM_ERROR', (event) => {
     console.error('STREAM_ERROR received:', event.payload);
     if (currentAssistantMessageDiv && currentAssistantContentDiv) {
-      currentAssistantContentDiv.innerHTML = md.render(`Error: ${event.payload.error}`);
+      currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(`Error: ${event.payload.error}`)); // Preprocess LaTeX
       currentAssistantMessageDiv.classList.remove('streaming');
       currentAssistantMessageDiv.classList.add('error'); // Optional: add error class for styling
     } else {

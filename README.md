@@ -14,10 +14,11 @@ A Tauri application for easy interaction with AI models.
 *   Background Mode (0.3.2 and [MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt (0.4.0 and after)
 *   Reasoning for R1 (0.4.0 and after)
+*   `\( ... \)`, `\[ ... \]` LaTeX Delimiter Support (0.4.1 and after)
 
 ### In Progress Features
 
-*   Copy to Clipboard (Idea 0.4.1 💡)
+*   Copy to Clipboard (Idea 0.4.X 💡)
 
 ## IMPORTANT: Prerequisites
 

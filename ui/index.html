@@ -1,102 +1,161 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Shard</title>
-    <link rel="stylesheet" href="./style.css" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"
-      integrity="sha384-GvrOXuhMATgEsSwCs4smul74iXGOixntILdUW9XmUC6+HX0sLNAK3q71HotJqlAn" crossorigin="anonymous">
-  </head>
-  <body>
-    <div class="container">
-      <!-- Settings Panel (initially hidden) -->
-      <div id="settings-panel">
-        <div id="settings-content">
-          <div class="heading-with-status">
-            <h2>API Keys</h2>
-            <div id="api-key-status-icon" class="status-icon">
-              <span class="status-icon-text">Saved!</span>
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                class="lucide lucide-check-check-icon lucide-check-check">
-                <path d="M18 6 7 17l-5-5" />
-                <path d="m22 10-7.5 7.5L13 16" />
-              </svg>
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Shard</title>
+        <link rel="stylesheet" href="./style.css" />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"
+            integrity="sha384-GvrOXuhMATgEsSwCs4smul74iXGOixntILdUW9XmUC6+HX0sLNAK3q71HotJqlAn"
+            crossorigin="anonymous"
+        />
+    </head>
+    <body>
+        <div class="container">
+            <!-- Settings Panel (initially hidden) -->
+            <div id="settings-panel">
+                <div id="settings-content">
+                    <div class="heading-with-status">
+                        <h2>API Keys</h2>
+                        <div id="api-key-status-icon" class="status-icon">
+                            <span class="status-icon-text">Saved!</span>
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                class="lucide lucide-check-check-icon lucide-check-check"
+                            >
+                                <path d="M18 6 7 17l-5-5" />
+                                <path d="m22 10-7.5 7.5L13 16" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <!-- Existing OpenRouter API Key -->
+                    <div class="setting-item">
+                        <label for="api-key-input">OpenRouter:</label>
+                        <div class="api-key-controls">
+                            <input
+                                type="password"
+                                id="api-key-input"
+                                placeholder="Enter your OpenRouter API key"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- New Gemini API Key -->
+                    <div class="setting-item">
+                        <label for="gemini-api-key-input">Google:</label>
+                        <div class="api-key-controls">
+                            <input
+                                type="password"
+                                id="gemini-api-key-input"
+                                placeholder="Enter your Google AI Studio API key"
+                            />
+                        </div>
+                    </div>
+
+                    <h2>Model Selection</h2>
+                    <!-- Model Selector -->
+                    <div class="setting-item">
+                        <!-- <label for="model-select">Chat Model:</label> -->
+                        <select id="model-select">
+                            <!-- Options will be populated by JS -->
+                        </select>
+                    </div>
+                    <!-- End Model Selector -->
+                </div>
             </div>
-          </div>
 
-          <!-- Existing OpenRouter API Key -->
-          <div class="setting-item">
-            <label for="api-key-input">OpenRouter API Key:</label>
-            <div class="api-key-controls">
-              <input type="password" id="api-key-input" placeholder="Enter your OpenRouter API key">
-              </div>
-          </div>
+            <div id="chat-history" class="chat-history"></div>
 
-          <!-- New Gemini API Key -->
-          <div class="setting-item">
-            <label for="gemini-api-key-input">Google AI Studio API Key:</label>
-            <div class="api-key-controls">
-              <input type="password" id="gemini-api-key-input" placeholder="Enter your Google AI Studio API key">
+            <!-- Tool Buttons Area -->
+            <div id="tool-buttons">
+                <!-- Replaced OCR Button with Icon Container -->
+                <div id="ocr-icon-container" title="Capture Screen & Show OCR">
+                    <div id="ocr-icon">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="24"
+                            height="24"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="lucide lucide-camera-icon lucide-camera"
+                        >
+                            <path
+                                d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"
+                            />
+                            <circle cx="12" cy="13" r="3" />
+                        </svg>
+                    </div>
+                </div>
+                <!-- Moved Settings Button Here -->
+                <button id="settings-toggle" title="Settings">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="white"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="lucide lucide-settings-icon lucide-settings"
+                    >
+                        <path
+                            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                        />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                </button>
+                <button id="clear-chat-button" title="Clear Chat" class="hidden">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="lucide lucide-trash-icon lucide-trash"
+                    >
+                        <path d="M3 6h18" />
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                    </svg>
+                </button>
             </div>
-          </div>
 
-          <h2>Model Selection</h2>
-          <!-- Model Selector -->
-          <div class="setting-item">
-            <label for="model-select">Chat Model:</label>
-            <select id="model-select">
-              <!-- Options will be populated by JS -->
-            </select>
-          </div>
-          <!-- End Model Selector -->
+            <div class="input-area">
+                <!-- Add wrapper for input and image preview -->
+                <div class="input-wrapper">
+                    <img
+                        id="input-image-preview"
+                        class="input-image-preview hidden"
+                        src=""
+                        alt="Screenshot Preview"
+                    />
+                    <textarea id="message-input" placeholder="Send message..." rows="1"></textarea>
+                </div>
+            </div>
         </div>
-      </div>
 
-      <div id="chat-history" class="chat-history"></div>
-
-      <!-- Tool Buttons Area -->
-       <div id="tool-buttons">
-         <!-- Replaced OCR Button with Icon Container -->
-         <div id="ocr-icon-container" title="Capture Screen & Show OCR">
-            <div id="ocr-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-camera-icon lucide-camera">
-                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                  <circle cx="12" cy="13" r="3" />
-                </svg>
-            </div>
-         </div>
-         <!-- Moved Settings Button Here -->
-         <button id="settings-toggle" title="Settings">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white"
-              stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings-icon lucide-settings">
-              <path
-                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-         </button>
-         <button id="clear-chat-button" title="Clear Chat" class="hidden">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-icon lucide-trash">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-            </svg>
-         </button>
-       </div>
-
-      <div class="input-area">
-        <!-- Add wrapper for input and image preview -->
-        <div class="input-wrapper">
-           <img id="input-image-preview" class="input-image-preview hidden" src="" alt="Screenshot Preview" />
-           <textarea id="message-input" placeholder="Send message..." rows="1"></textarea>
-        </div>
-      </div>
-    </div>
-
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+        <script type="module" src="/src/main.ts"></script>
+    </body>
 </html>

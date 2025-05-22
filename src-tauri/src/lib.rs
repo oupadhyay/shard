@@ -11,12 +11,12 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::PhysicalPosition;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent, Window}; // Added Emitter and Window
+use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent}; // Added Emitter and Window
+use tauri_nspanel::WebviewWindowExt; // CORRECTED IMPORT
+use tauri_nspanel::{panel_delegate, Panel}; // Added for panel delegate
 use tauri_plugin_global_shortcut::{
     self as tauri_gs, GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState,
 };
-use tauri_nspanel::WebviewWindowExt; // CORRECTED IMPORT
-use tauri_nspanel::{panel_delegate, Panel}; // Added for panel delegate
 use tesseract; // Uncommented
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
 
@@ -24,7 +24,7 @@ use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin i
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 
 // --- System Instruction ---
-const SYSTEM_INSTRUCTION: &str = "You carefully provide accurate, concise, factual answers.\n  - Be concise. Minimize any other prose.\n  - If you think there might not be a correct answer, you say so. If you do not know the answer, say so instead of guessing.";
+const SYSTEM_INSTRUCTION: &str = "You provide accurate, factual answers.\n  - If you do not know the answer, make your best guess.";
 
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -62,7 +62,7 @@ fn load_config(app_handle: &AppHandle) -> Result<AppConfig, String> {
         );
         return Ok(AppConfig::default());
     }
-    log::info!("Loading config from {:?}", config_path);
+    // log::info!("Loading config from {:?}", config_path);
     let content = fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config file: {}", e))?;
     toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
@@ -164,7 +164,7 @@ struct GeminiChatCompletionResponse {
 #[derive(Serialize, Deserialize, Debug, Clone)] // Clone for emitting
 struct StreamChoiceDelta {
     content: Option<String>, // Content is optional as some chunks might not have it
-    role: Option<String>, // Role might appear in first chunk
+    role: Option<String>,    // Role might appear in first chunk
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
 }
@@ -544,11 +544,15 @@ async fn send_text_to_model(
     log::info!("Processing request for model: {}", model_name);
 
     // Check if the model is a Gemini model
-    if model_name.starts_with("gemini-") || model_name.starts_with("google/") { // Crude check, refine as needed
+    if model_name.starts_with("gemini-") || model_name.starts_with("google/") {
+        // Crude check, refine as needed
         let gemini_api_key = match config.gemini_api_key {
             Some(key) if !key.is_empty() => key,
             _ => {
-                log::error!("Gemini API key is not set in config for model: {}", model_name);
+                log::error!(
+                    "Gemini API key is not set in config for model: {}",
+                    model_name
+                );
                 return Err(
                     "Gemini API key is not configured. Please set it in settings.".to_string(),
                 );
@@ -556,7 +560,14 @@ async fn send_text_to_model(
         };
         log::info!("Using Gemini API for model: {}", model_name);
 
-        match call_gemini_api(final_messages, gemini_api_key, model_name.replace("google/", ""), window.clone()).await {
+        match call_gemini_api(
+            final_messages,
+            gemini_api_key,
+            model_name.replace("google/", ""),
+            window.clone(),
+        )
+        .await
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
@@ -568,7 +579,10 @@ async fn send_text_to_model(
         let api_key = match config.api_key {
             Some(key) if !key.is_empty() => key,
             _ => {
-                log::error!("OpenRouter API key is not set in config for model: {}", model_name);
+                log::error!(
+                    "OpenRouter API key is not set in config for model: {}",
+                    model_name
+                );
                 return Err(
                     "OpenRouter API key is not configured. Please set it in settings.".to_string(),
                 );
@@ -623,12 +637,15 @@ async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result
         "deepseek/deepseek-r1:free",
         "gemini-2.0-flash",
         "gemini-2.5-flash-preview-04-17",
-        "gemini-2.5-flash-preview-04-17#thinking-enabled"
+        "gemini-2.5-flash-preview-04-17#thinking-enabled",
     ];
     // Updated check to be more specific
     if !allowed_models.contains(&model_name.as_str()) {
         log::error!("Attempted to set invalid model: {}", model_name);
-        return Err(format!("Invalid model selection: {}. Allowed models are: {:?}", model_name, allowed_models));
+        return Err(format!(
+            "Invalid model selection: {}. Allowed models are: {:?}",
+            model_name, allowed_models
+        ));
     }
     let mut config = load_config(&app_handle).unwrap_or_else(|e| {
         log::warn!(
@@ -689,8 +706,8 @@ async fn call_gemini_api(
         actual_model_name_for_api = "gemini-2.5-flash-preview-04-17".to_string(); // Use base model name for API
         gen_config = Some(GenerationConfigForGemini {
             thinking_config: None, // No specific thinking_config, so model uses its defaults.
-            // This means neither include_thoughts nor thinking_budget will be sent.
-            // ..Default::default()
+                                   // This means neither include_thoughts nor thinking_budget will be sent.
+                                   // ..Default::default()
         });
     }
     // For other gemini models, gen_config remains None, and no specific generation_config will be sent.
@@ -702,28 +719,36 @@ async fn call_gemini_api(
     );
 
     let request_payload = GeminiChatCompletionRequest {
-        contents: messages.into_iter().map(|msg| {
-            let role_for_gemini = if msg.role == "assistant" {
-                "model".to_string()
-            } else if msg.role == "system" { // Our prepended system instruction
-                "user".to_string() // Gemini handles system prompts as initial "user" messages
-            } else { // "user" (from human actual input)
-                msg.role // Assuming it's "user"
-            };
-            GeminiContent {
-                parts: vec![GeminiPart { text: msg.content }],
-                role: Some(role_for_gemini),
-            }
-        }).collect(),
+        contents: messages
+            .into_iter()
+            .map(|msg| {
+                let role_for_gemini = if msg.role == "assistant" {
+                    "model".to_string()
+                } else if msg.role == "system" {
+                    // Our prepended system instruction
+                    "user".to_string() // Gemini handles system prompts as initial "user" messages
+                } else {
+                    // "user" (from human actual input)
+                    msg.role // Assuming it's "user"
+                };
+                GeminiContent {
+                    parts: vec![GeminiPart { text: msg.content }],
+                    role: Some(role_for_gemini),
+                }
+            })
+            .collect(),
         generation_config: gen_config, // Set the generation_config
     };
 
     log::info!(
         "Sending STREAMING request to Gemini API for model: {} (API model: {}). Payload: {:?}",
-        model_identifier_from_config, actual_model_name_for_api, request_payload
+        model_identifier_from_config,
+        actual_model_name_for_api,
+        request_payload
     );
 
-    let response_result = client.post(&api_url)
+    let response_result = client
+        .post(&api_url)
         .header("Content-Type", "application/json")
         .json(&request_payload)
         .send()
@@ -746,24 +771,37 @@ async fn call_gemini_api(
 
                                     // Process complete lines from the buffer
                                     while let Some(newline_pos) = line_buffer.find("\n") {
-                                        let line = line_buffer.drain(..newline_pos + 1).collect::<String>();
+                                        let line = line_buffer
+                                            .drain(..newline_pos + 1)
+                                            .collect::<String>();
                                         let trimmed_line = line.trim();
 
                                         if trimmed_line.starts_with("data: ") {
                                             let data_json_str = &trimmed_line[6..]; // Skip "data: "
-                                            // Gemini stream might send an array of responses, often with one element.
-                                            // And sometimes it sends a single JSON object directly.
-                                            // We need to handle both cases.
-                                            // The API doc (and community post) suggests each SSE event is one JSON object representing a GeminiChatCompletionResponse.
+                                                                                    // Gemini stream might send an array of responses, often with one element.
+                                                                                    // And sometimes it sends a single JSON object directly.
+                                                                                    // We need to handle both cases.
+                                                                                    // The API doc (and community post) suggests each SSE event is one JSON object representing a GeminiChatCompletionResponse.
 
                                             // Attempt to parse as a single GeminiChatCompletionResponse
-                                            match serde_json::from_str::<GeminiChatCompletionResponse>(data_json_str) {
+                                            match serde_json::from_str::<GeminiChatCompletionResponse>(
+                                                data_json_str,
+                                            ) {
                                                 Ok(gemini_response_chunk) => {
-                                                    if let Some(candidate) = gemini_response_chunk.candidates.get(0) {
-                                                        if let Some(part) = candidate.content.parts.get(0) {
+                                                    if let Some(candidate) =
+                                                        gemini_response_chunk.candidates.get(0)
+                                                    {
+                                                        if let Some(part) =
+                                                            candidate.content.parts.get(0)
+                                                        {
                                                             let delta = &part.text;
                                                             accumulated_content.push_str(delta);
-                                                            if let Err(e) = window.emit("STREAM_CHUNK", StreamChunkPayload { delta: Some(delta.clone()) }) {
+                                                            if let Err(e) = window.emit(
+                                                                "STREAM_CHUNK",
+                                                                StreamChunkPayload {
+                                                                    delta: Some(delta.clone()),
+                                                                },
+                                                            ) {
                                                                 log::error!("Failed to emit STREAM_CHUNK for Gemini: {}", e);
                                                             }
                                                         }
@@ -773,7 +811,11 @@ async fn call_gemini_api(
                                                     // It might be an array of these objects, though less common for pure SSE streams.
                                                     // The official docs for streamGenerateContent show each event as *one* GenerateContentResponse.
                                                     // So, if direct parsing fails, it's likely an error or an unexpected format.
-                                                    if !data_json_str.is_empty() && data_json_str != "[" && data_json_str != "]" { // Avoid logging for simple array brackets if they appear alone.
+                                                    if !data_json_str.is_empty()
+                                                        && data_json_str != "["
+                                                        && data_json_str != "]"
+                                                    {
+                                                        // Avoid logging for simple array brackets if they appear alone.
                                                         log::warn!(
                                                             "Failed to parse Gemini stream data JSON as single object: {}. Raw: '{}'",
                                                             e,
@@ -784,30 +826,55 @@ async fn call_gemini_api(
                                             }
                                         } else if !trimmed_line.is_empty() {
                                             // Log unexpected non-empty lines that don't start with "data: "
-                                            log::warn!("Unexpected line in Gemini stream: {}", trimmed_line);
+                                            log::warn!(
+                                                "Unexpected line in Gemini stream: {}",
+                                                trimmed_line
+                                            );
                                         }
                                     }
                                 }
                                 Err(e) => {
                                     log::error!("Gemini stream chunk not valid UTF-8: {}", e);
-                                    let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Gemini stream chunk not valid UTF-8: {}", e) });
-                                    return Err(format!("Gemini stream chunk not valid UTF-8: {}", e));
+                                    let _ = window.emit(
+                                        "STREAM_ERROR",
+                                        StreamErrorPayload {
+                                            error: format!(
+                                                "Gemini stream chunk not valid UTF-8: {}",
+                                                e
+                                            ),
+                                        },
+                                    );
+                                    return Err(format!(
+                                        "Gemini stream chunk not valid UTF-8: {}",
+                                        e
+                                    ));
                                 }
                             }
                         }
                         Err(e) => {
                             log::error!("Error receiving stream chunk from Gemini: {}", e);
-                            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Error in Gemini stream: {}", e) });
+                            let _ = window.emit(
+                                "STREAM_ERROR",
+                                StreamErrorPayload {
+                                    error: format!("Error in Gemini stream: {}", e),
+                                },
+                            );
                             return Err(format!("Error receiving Gemini stream chunk: {}", e));
                         }
                     }
                 }
                 // Stream ended
-                log::info!("Gemini stream finished. Accumulated content: {}", accumulated_content);
-                let _ = window.emit("STREAM_END", StreamEndPayload {
-                    full_content: accumulated_content.clone(),
-                    reasoning: None, // Gemini API doesn't typically provide separate reasoning field in this way
-                });
+                log::info!(
+                    "Gemini stream finished. Accumulated content: {}",
+                    accumulated_content
+                );
+                let _ = window.emit(
+                    "STREAM_END",
+                    StreamEndPayload {
+                        full_content: accumulated_content.clone(),
+                        reasoning: None, // Gemini API doesn't typically provide separate reasoning field in this way
+                    },
+                );
                 Ok(())
             } else {
                 let status = response.status();
@@ -820,15 +887,28 @@ async fn call_gemini_api(
                     status,
                     error_text
                 );
-                let err_msg = format!("Gemini API (streaming) request failed: {} - {}", status, error_text);
-                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+                let err_msg = format!(
+                    "Gemini API (streaming) request failed: {} - {}",
+                    status, error_text
+                );
+                let _ = window.emit(
+                    "STREAM_ERROR",
+                    StreamErrorPayload {
+                        error: err_msg.clone(),
+                    },
+                );
                 Err(err_msg)
             }
         }
         Err(e) => {
             log::error!("Network request to Gemini API (streaming) failed: {}", e);
             let err_msg = format!("Gemini API (streaming) network request failed: {}", e);
-            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+            let _ = window.emit(
+                "STREAM_ERROR",
+                StreamErrorPayload {
+                    error: err_msg.clone(),
+                },
+            );
             Err(err_msg)
         }
     }
@@ -851,11 +931,18 @@ async fn call_openrouter_api(
 
     // Enable reasoning for DeepSeek R1 models
     if model_name.starts_with("deepseek/deepseek-r1") {
-        log::info!("Enabling 'include_reasoning' for DeepSeek R1 model: {}", model_name);
+        log::info!(
+            "Enabling 'include_reasoning' for DeepSeek R1 model: {}",
+            model_name
+        );
         request_payload.include_reasoning = Some(true);
     }
 
-    log::info!("Sending streaming request to OpenRouter for model: {}. Payload: {:?}", model_name, request_payload);
+    log::info!(
+        "Sending streaming request to OpenRouter for model: {}. Payload: {:?}",
+        model_name,
+        request_payload
+    );
 
     let response_result = client
         .post(api_url)
@@ -884,61 +971,107 @@ async fn call_openrouter_api(
 
                                     // Process complete lines from the buffer
                                     while let Some(newline_pos) = line_buffer.find("\n") {
-                                        let line = line_buffer.drain(..newline_pos + 1).collect::<String>();
+                                        let line = line_buffer
+                                            .drain(..newline_pos + 1)
+                                            .collect::<String>();
                                         let trimmed_line = line.trim();
 
                                         if trimmed_line.starts_with("data: ") {
                                             let data_json_str = &trimmed_line[6..];
                                             if data_json_str == "[DONE]" {
                                                 log::info!("OpenRouter stream [DONE] received.");
-                                                let final_reasoning = if accumulated_reasoning.is_empty() { None } else { Some(accumulated_reasoning) };
-                                                let _ = window.emit("STREAM_END", StreamEndPayload {
-                                                    full_content: accumulated_content.clone(),
-                                                    reasoning: final_reasoning,
-                                                });
+                                                let final_reasoning =
+                                                    if accumulated_reasoning.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(accumulated_reasoning)
+                                                    };
+                                                let _ = window.emit(
+                                                    "STREAM_END",
+                                                    StreamEndPayload {
+                                                        full_content: accumulated_content.clone(),
+                                                        reasoning: final_reasoning,
+                                                    },
+                                                );
                                                 return Ok(()); // Successfully finished streaming
                                             }
-                                            match serde_json::from_str::<StreamingChatCompletionResponse>(data_json_str) {
+                                            match serde_json::from_str::<
+                                                StreamingChatCompletionResponse,
+                                            >(
+                                                data_json_str
+                                            ) {
                                                 Ok(parsed_chunk) => {
-                                                    if let Some(choice) = parsed_chunk.choices.get(0) {
-                                                        if let Some(content_delta) = &choice.delta.content {
-                                                            accumulated_content.push_str(content_delta);
-                                                            if let Err(e) = window.emit("STREAM_CHUNK", StreamChunkPayload { delta: Some(content_delta.clone()) }) {
+                                                    if let Some(choice) =
+                                                        parsed_chunk.choices.get(0)
+                                                    {
+                                                        if let Some(content_delta) =
+                                                            &choice.delta.content
+                                                        {
+                                                            accumulated_content
+                                                                .push_str(content_delta);
+                                                            if let Err(e) = window.emit(
+                                                                "STREAM_CHUNK",
+                                                                StreamChunkPayload {
+                                                                    delta: Some(
+                                                                        content_delta.clone(),
+                                                                    ),
+                                                                },
+                                                            ) {
                                                                 log::error!("Failed to emit STREAM_CHUNK: {}", e);
                                                             }
                                                         }
                                                         // Capture reasoning delta if present
-                                                        if let Some(reasoning_delta) = &choice.delta.reasoning {
+                                                        if let Some(reasoning_delta) =
+                                                            &choice.delta.reasoning
+                                                        {
                                                             if !reasoning_delta.is_empty() {
                                                                 log::debug!("Received reasoning delta for OpenRouter: '{}'", reasoning_delta);
-                                                                accumulated_reasoning.push_str(reasoning_delta);
+                                                                accumulated_reasoning
+                                                                    .push_str(reasoning_delta);
                                                             }
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
                                                     // Ignore lines that are not valid JSON data chunks, could be comments or empty lines
-                                                    if !data_json_str.is_empty() && !data_json_str.starts_with(":") {
+                                                    if !data_json_str.is_empty()
+                                                        && !data_json_str.starts_with(":")
+                                                    {
                                                         log::warn!("Failed to parse stream data JSON from OpenRouter: '{}'. Raw: '{}'", e, data_json_str);
                                                     }
                                                 }
                                             }
-                                        } else if !trimmed_line.is_empty() && !trimmed_line.starts_with(":") {
+                                        } else if !trimmed_line.is_empty()
+                                            && !trimmed_line.starts_with(":")
+                                        {
                                             // Log unexpected non-empty, non-comment lines
-                                            log::warn!("Unexpected line in OpenRouter stream: {}", trimmed_line);
+                                            log::warn!(
+                                                "Unexpected line in OpenRouter stream: {}",
+                                                trimmed_line
+                                            );
                                         }
                                     }
                                 }
                                 Err(e) => {
                                     log::error!("Stream chunk not valid UTF-8: {}", e);
-                                    let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Stream chunk not valid UTF-8: {}", e) });
+                                    let _ = window.emit(
+                                        "STREAM_ERROR",
+                                        StreamErrorPayload {
+                                            error: format!("Stream chunk not valid UTF-8: {}", e),
+                                        },
+                                    );
                                     return Err(format!("Stream chunk not valid UTF-8: {}", e));
                                 }
                             }
                         }
                         Err(e) => {
                             log::error!("Error receiving stream chunk from OpenRouter: {}", e);
-                            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: format!("Error in stream: {}", e) });
+                            let _ = window.emit(
+                                "STREAM_ERROR",
+                                StreamErrorPayload {
+                                    error: format!("Error in stream: {}", e),
+                                },
+                            );
                             return Err(format!("Error receiving stream chunk: {}", e));
                         }
                     }
@@ -946,7 +1079,12 @@ async fn call_openrouter_api(
                 // If loop finishes without [DONE], it might be an incomplete stream or an issue.
                 // Emit an error or handle as appropriate. For now, assume [DONE] is the primary exit.
                 log::warn!("OpenRouter stream ended without [DONE] marker.");
-                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: "Stream ended without [DONE] marker".to_string() });
+                let _ = window.emit(
+                    "STREAM_ERROR",
+                    StreamErrorPayload {
+                        error: "Stream ended without [DONE] marker".to_string(),
+                    },
+                );
                 Err("Stream ended without [DONE] marker".to_string())
             } else {
                 let status = response.status();
@@ -960,14 +1098,24 @@ async fn call_openrouter_api(
                     error_text
                 );
                 let err_msg = format!("API request failed: {} - {}", status, error_text);
-                let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+                let _ = window.emit(
+                    "STREAM_ERROR",
+                    StreamErrorPayload {
+                        error: err_msg.clone(),
+                    },
+                );
                 Err(err_msg)
             }
         }
         Err(e) => {
             log::error!("Network request to OpenRouter failed: {}", e);
             let err_msg = format!("Network request failed: {}", e);
-            let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: err_msg.clone() });
+            let _ = window.emit(
+                "STREAM_ERROR",
+                StreamErrorPayload {
+                    error: err_msg.clone(),
+                },
+            );
             Err(err_msg)
         }
     }
@@ -987,7 +1135,8 @@ pub fn run() {
     } else {
         tauri_gs::Modifiers::CONTROL | tauri_gs::Modifiers::SHIFT
     };
-    let show_hide_shortcut_definition = tauri_gs::Shortcut::new(Some(show_hide_modifiers), tauri_gs::Code::KeyZ);
+    let show_hide_shortcut_definition =
+        tauri_gs::Shortcut::new(Some(show_hide_modifiers), tauri_gs::Code::KeyZ);
 
     tauri::Builder::default()
         .plugin(

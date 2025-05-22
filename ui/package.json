@@ -1,7 +1,7 @@
 {
   "name": "ui",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,16 +9,16 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "typescript": "^5.2.2",
-    "vite": "^6.3.5",
     "@types/katex": "^0.16.7",
-    "@types/markdown-it": "^14.0.1"
+    "@types/markdown-it": "^14.0.1",
+    "typescript": "^5.2.2",
+    "vite": "^6.3.5"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0-beta.13",
+    "@vscode/markdown-it-katex": "^1.1.1",
     "katex": "^0.16.10",
-    "tauri-plugin-screenshots-api": "^2.2.0",
     "markdown-it": "^14.1.0",
-    "@vscode/markdown-it-katex": "^1.1.1"
+    "tauri-plugin-screenshots-api": "^2.2.0"
   }
 }

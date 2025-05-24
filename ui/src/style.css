@@ -417,21 +417,22 @@ body {
 
 /* General Tool Button Style */
 #tool-buttons button,
-#ocr-icon-container /* Target the container now */ {
-    background: none;
+#ocr-icon-container {
+    background: rgba(60, 60, 60, 0.5);
     border: none;
     color: var(--text-color);
     cursor: pointer;
     padding: 5px;
-    border-radius: 4px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: background-color 0.2s; /* Add transition for hover effect */
 }
 
 #tool-buttons button:hover,
-#ocr-icon-container:hover /* Target the container for hover */ {
-    background-color: var(--accent-color-hover);
+#ocr-icon-container:hover {
+    background-color: rgba(100, 100, 100, 0.5);
 }
 
 #tool-buttons button svg,
@@ -463,8 +464,11 @@ body {
     font-size: 16px;
     border-radius: 50%;
     cursor: pointer;
-    padding: 6px; /* Adjust padding */
-    transition: color 0.2s;
+    padding: 6px;
+    transition:
+        color 0.2s,
+        background-color 0.2s,
+        border-color 0.2s; /* Add background-color transition */
 }
 
 #settings-toggle:hover {

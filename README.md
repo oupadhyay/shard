@@ -19,6 +19,7 @@ A Tauri application for easy interaction with AI models.
 ### In Progress Features
 
 *   Copy to Clipboard (Idea 0.4.X 💡)
+*   Web Search (Idea 0.5.0 💡)
 
 ## IMPORTANT: Prerequisites
 

@@ -2,30 +2,30 @@
 
 A Tauri application for easy interaction with AI models.
 
-## Completed Features
+## Features
 
-*   Chat interface with OpenRouter models (DeepSeek V3, Gemini Flash, DeepSeek R1)
-*   API Key Management
-*   Model Selection
+*   Chat Interface
+*   Free Models (DeepSeek V3, Gemini Flash, DeepSeek R1)
+*   API Key Management (OpenRouter & Google)
 *   **Screen Capture + OCR Analysis** (Requires Tesseract)
-*   Markdown Rendering (0.3.0 and after)
-*   LaTeX Rendering (0.3.0 and after)
-*   Streaming Responses (0.3.1 and after)
-*   Background Mode (0.3.2 and [MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
-*   System Prompt (0.4.0 and after)
-*   Reasoning for R1 (0.4.0 and after)
-*   `\( ... \)`, `\[ ... \]` LaTeX Delimiter Support (0.4.1 and after)
+*   Markdown Rendering
+*   LaTeX Rendering
+*   Streaming Responses
+*   Background Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
+*   System Prompt
+*   Reasoning for R1
+*   LaTeX Delimiter Support
 
 ### In Progress Features
 
-*   Copy to Clipboard (Idea 0.4.X 💡)
 *   Web Search (Idea 0.5.0 💡)
+*   YT Video Summarization (Idea 0.5.1 💡)
+
+Feel free to add more ideas in the Issues or contribute to the project with a PR!
 
 ## IMPORTANT: Prerequisites
 
-For the **Screen Capture + OCR Analysis** feature to work, you **MUST** have Tesseract OCR installed on your system.
-
-The application uses the `rust-tesseract` crate, which relies on a system installation of Tesseract.
+For the **Screen Capture + OCR Analysis** feature to work, you **MUST** have Tesseract OCR installed on your system. The application uses the `rust-tesseract` crate, which relies on a system installation of Tesseract.
 
 ### Installation Instructions
 

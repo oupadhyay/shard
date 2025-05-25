@@ -28,9 +28,8 @@ const clearChatButton = document.getElementById("clear-chat-button") as HTMLButt
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
 
 const FADE_DURATION_SETTINGS = 80; // Duration for settings panel fade
-const INITIAL_WINDOW_HEIGHT = 350;
-const INITIAL_WINDOW_WIDTH = 300;
-const MAX_WINDOW_HEIGHT = 550;
+// Define fixed window dimensions
+const FIXED_WINDOW_WIDTH = 350;
 const appWindow = getCurrentWindow();
 
 // Create and add close button to settings panel
@@ -99,6 +98,7 @@ let currentImageBase64: string | null = null;
 let currentTempScreenshotPath: string | null = null;
 let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold the div of the assistant's message being streamed
 let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
+let isAIResponding: boolean = false; // ADDED: Flag to track if AI is currently responding
 
 // --- Helper function to preprocess LaTeX delimiters ---
 function preprocessLatex(content: string): string {
@@ -111,59 +111,26 @@ function preprocessLatex(content: string): string {
   return content;
 }
 
-// --- Resize window height based on content ---
-async function adjustWindowHeightBasedOnContent() {
-  if (!chatHistory || !messageInput || !document.body) {
-    console.warn("[AdjustWindow] Required elements for height adjustment not found.");
-    return;
-  }
-
+// --- Function to set initial window size and position ---
+async function setInitialWindowGeometry() {
   try {
-    console.log("[AdjustWindow] Starting adjustment...");
-
-    // 1. Calculate all desired geometry first
-    const chatHistoryDiv = document.getElementById("chat-history");
-    let desiredContentHeight = INITIAL_WINDOW_HEIGHT;
-
-    if (chatHistoryDiv) {
-      desiredContentHeight = chatHistoryDiv.scrollHeight + 156; // 156 = other UI elements
-    }
-
-    let targetWindowHeight = Math.max(INITIAL_WINDOW_HEIGHT, desiredContentHeight);
-    targetWindowHeight = Math.min(targetWindowHeight, MAX_WINDOW_HEIGHT);
-    let targetWindowWidth = INITIAL_WINDOW_WIDTH;
-
     const monitor = await currentMonitor();
-    let targetLogicalX = 0;
-    let targetLogicalY = 0;
-
     if (monitor) {
       const logicalMonitorHeight = monitor.size.height / monitor.scaleFactor;
-      targetLogicalY = logicalMonitorHeight - targetWindowHeight;
+
+      const targetLogicalY = logicalMonitorHeight - logicalMonitorHeight;
+
+      await appWindow.setSize(new LogicalSize(FIXED_WINDOW_WIDTH, logicalMonitorHeight));
+      await appWindow.setPosition(new LogicalPosition(0, targetLogicalY));
+      console.log(`[WindowSetup] Window set to ${FIXED_WINDOW_WIDTH}x${logicalMonitorHeight} at (0, ${targetLogicalY})`);
     } else {
-      console.warn("[AdjustWindow] Could not get monitor info for positioning.");
+      // Fallback if monitor info isn't available (should be rare)
+      await appWindow.setSize(new LogicalSize(FIXED_WINDOW_WIDTH, 750));
+      console.warn("[WindowSetup] Could not get monitor info. Window with fixed size.");
     }
-
-    console.log(
-      `[AdjustWindow] Target Logical Size: W=${targetWindowWidth}, H=${targetWindowHeight}`,
-    );
-    if (monitor)
-      console.log(`[AdjustWindow] Target Logical Pos: X=${targetLogicalX}, Y=${targetLogicalY}`);
-
-    console.log("[AdjustWindow] Setting window size...");
-    await appWindow.setSize(new LogicalSize(targetWindowWidth, targetWindowHeight));
-
-    if (monitor) {
-      console.log("[AdjustWindow] Setting window position...");
-      await appWindow.setPosition(new LogicalPosition(targetLogicalX, targetLogicalY));
-    }
-
-    console.log("[AdjustWindow] Setting focus to window...");
     await appWindow.setFocus();
-
-    console.log("[AdjustWindow] Adjustment complete.");
   } catch (error) {
-    console.error("[AdjustWindow] Failed to adjust window geometry:", error);
+    console.error("[WindowSetup] Failed to set initial window geometry:", error);
   }
 }
 
@@ -388,26 +355,48 @@ function updateInputAreaForCapture() {
 
 // --- Clear Chat Handler ---
 async function clearChatHistory() {
-  if (chatHistory) chatHistory.innerHTML = "";
-  console.log("Chat history cleared.");
-  await adjustWindowHeightBasedOnContent();
-  chatMessageHistory = [];
-  // Hide clear button again
-  if (clearChatButton) clearChatButton.classList.add("hidden");
+  const bodyElement = document.body;
 
-  // Clear capture state and cleanup temp file if necessary
-  if (currentTempScreenshotPath) {
-    console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
-    invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath })
-      .then(() => console.log("Temp screenshot cleanup successful."))
-      .catch((err) => console.error("Error cleaning up temp screenshot:", err));
-  }
-  currentOcrText = null;
-  currentImageBase64 = null;
-  currentTempScreenshotPath = null;
-  updateInputAreaForCapture(); // Clear preview and tooltip
+  // Start fade out
+  console.log("Starting fade out for chat clear...");
+  bodyElement.classList.add("fade-out");
+  bodyElement.classList.remove("fade-in");
 
-  if (statusMessage) statusMessage.textContent = ""; // Clear status
+  // Wait for fade out to complete
+  setTimeout(async () => {
+  // Clear chat content while faded out
+    if (chatHistory) chatHistory.innerHTML = "";
+    console.log("Chat history cleared.");
+    chatMessageHistory = [];
+
+    // Hide clear button again
+    if (clearChatButton) clearChatButton.classList.add("hidden");
+
+    // Clear capture state and cleanup temp file if necessary
+    if (currentTempScreenshotPath) {
+      console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
+      invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath })
+        .then(() => console.log("Temp screenshot cleanup successful."))
+        .catch((err) => console.error("Error cleaning up temp screenshot:", err));
+    }
+    currentOcrText = null;
+    currentImageBase64 = null;
+    currentTempScreenshotPath = null;
+    updateInputAreaForCapture(); // Clear preview and tooltip
+
+    if (statusMessage) statusMessage.textContent = ""; // Clear status
+
+    // Start fade in after everything is resized
+    console.log("Starting fade in after chat clear...");
+    bodyElement.classList.remove("fade-out");
+    bodyElement.classList.add("fade-in");
+
+    // Clean up fade-in class after animation completes
+    setTimeout(() => {
+      bodyElement.classList.remove("fade-in");
+    }, FADE_DURATION);
+
+  }, FADE_DURATION);
 }
 
 // --- Capture OCR Handler ---
@@ -486,6 +475,11 @@ async function handleCaptureOcr() {
 
 // --- Send Message Handler ---
 async function handleSendMessage() {
+  if (isAIResponding) {
+    console.log("handleSendMessage: AI is currently responding. New message blocked.");
+    return; // Prevent sending a new message while AI is responding
+  }
+
   let userTypedText = messageInput.value.trim();
   let textToSend = userTypedText;
   let textToDisplay = userTypedText;
@@ -516,13 +510,15 @@ async function handleSendMessage() {
 
   addMessageToHistory("You", textToDisplay); // This will also add it to chatMessageHistory
 
+  // Optimistically resize window to maximum height expecting a potentially long response
+
   // Prepare messages for the backend
   // The 'textToDisplay' is the most recent user message.
   // chatMessageHistory already contains all prior messages, including the one just added by addMessageToHistory.
   const messagesToSendToBackend = [...chatMessageHistory]; // MODIFIED: Use the updated chatMessageHistory
 
   messageInput.value = ""; // Clear input field now
-  messageInput.disabled = true;
+  // messageInput.disabled = true; // MODIFIED: Allow typing while AI responds
   if (messageInput.title) messageInput.title = ""; // Clear tooltip immediately
   messageInput.style.height = initialTextareaHeight; // Reset height
   messageInput.style.overflowY = "hidden"; // Hide scrollbar again
@@ -545,8 +541,9 @@ async function handleSendMessage() {
 
   currentAssistantContentDiv = document.createElement("div"); // Create the content div
   currentAssistantContentDiv.classList.add("message-content");
-  currentAssistantContentDiv.innerHTML =
-    '<div class="dots-container"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>'; // Initial thinking dots
+  // Use the new getStreamingDots() function for the initial indicator
+  currentAssistantContentDiv.innerHTML = ""; // Clear any default content
+  currentAssistantContentDiv.appendChild(getStreamingDots());
   assistantMessagePlaceholder.appendChild(currentAssistantContentDiv);
 
   currentAssistantMessageDiv = assistantMessagePlaceholder; // Store reference to the whole message
@@ -556,6 +553,7 @@ async function handleSendMessage() {
     chatHistory.scrollTop = chatHistory.scrollHeight;
   }
 
+  isAIResponding = true; // Set flag as AI is about to respond
   try {
     // Invoke send_text_to_model. It no longer directly returns the message content.
     await core.invoke("send_text_to_model", {
@@ -593,6 +591,7 @@ async function handleSendMessage() {
       currentAssistantMessageDiv.classList.remove("streaming"); // Remove streaming class if error occurs here
       currentAssistantMessageDiv.classList.add("error"); // Optional: add error class
     }
+    isAIResponding = false; // Reset flag on invoke error
 
     // Even on error, if we *tried* to send OCR text, attempt cleanup
     if (tempPathToClean) {
@@ -604,10 +603,10 @@ async function handleSendMessage() {
   } finally {
     // Re-enable input regardless of success/failure OF THE INVOKE CALL
     // Actual message completion enables it in STREAM_END or STREAM_ERROR
-    if (messageInput) {
-      messageInput.disabled = false;
-      // messageInput.focus();
-    }
+    // if (messageInput) { // MODIFIED: No longer disabling/enabling here for this purpose
+    //   messageInput.disabled = false;
+    //   // messageInput.focus();
+    // }
     // Ensure preview/tooltip are cleared in case they weren't before
     updateInputAreaForCapture();
   }
@@ -639,6 +638,17 @@ let streamAnimationFrameRequested = false; // ADDED: Tracks if an animation fram
 const MAX_SUB_CHUNK_LENGTH = 70; // Characters per animated sub-chunk
 const SUB_CHUNK_ANIMATION_DELAY = 50; // Milliseconds delay between animating sub-chunks
 
+// --- Helper function to create streaming dots ---
+function getStreamingDots(): HTMLSpanElement {
+  const dotsContainer = document.createElement("span");
+  dotsContainer.classList.add("streaming-dots");
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement("span");
+    dotsContainer.appendChild(dot);
+  }
+  return dotsContainer;
+}
+
 async function setupStreamListeners() {
   if (unlistenStreamChunk) unlistenStreamChunk();
   unlistenStreamChunk = await listen<StreamChunkPayload>("STREAM_CHUNK", (event) => {
@@ -661,8 +671,16 @@ async function setupStreamListeners() {
         streamAnimationFrameRequested = false; // Reset flag for next frame
 
         if (currentBatchText) {
-          if (currentAssistantContentDiv.innerHTML.includes("dots-container")) {
-            currentAssistantContentDiv.innerHTML = ""; // Clear thinking dots
+          // The initial display is now also .streaming-dots, so this specific check for "dots-container" is less critical
+          // but the general logic of removing dots before adding text is sound.
+          if (currentAssistantContentDiv.innerHTML.includes("dots-container")) { // This will likely be false now
+            currentAssistantContentDiv.innerHTML = ""; // Clear initial thinking dots (if they were the old style)
+          }
+
+          // Remove any existing streaming dots before adding new text
+          const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+          if (existingDots) {
+            existingDots.remove();
           }
 
           // Function to animate text piece by piece
@@ -691,9 +709,19 @@ async function setupStreamListeners() {
               setTimeout(() => {
                 animateTextSequentially(remainingText);
               }, SUB_CHUNK_ANIMATION_DELAY);
+            } else {
+              // Append streaming dots after the last sub-chunk is animated
+              if (currentAssistantContentDiv) {
+                currentAssistantContentDiv.appendChild(getStreamingDots());
+                if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight; // Scroll again after adding dots
+              }
             }
           }
           animateTextSequentially(currentBatchText); // Start processing the batch
+        } else if (currentAssistantContentDiv.innerHTML !== "" && !currentAssistantContentDiv.querySelector(".streaming-dots")) {
+          // If buffer was empty but there's content and no dots, add dots (e.g. after clearing initial dots)
+          currentAssistantContentDiv.appendChild(getStreamingDots());
+          if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
         }
       });
     } else if (!currentAssistantContentDiv && streamDeltaBuffer) {
@@ -708,9 +736,13 @@ async function setupStreamListeners() {
 
   if (unlistenStreamEnd) unlistenStreamEnd();
   unlistenStreamEnd = await listen<StreamEndPayload>("STREAM_END", async (event) => {
-    await adjustWindowHeightBasedOnContent();
     console.log("STREAM_END received:", event.payload);
     if (currentAssistantMessageDiv && currentAssistantContentDiv) {
+      // Remove streaming dots before setting final content
+      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+      if (existingDots) {
+        existingDots.remove();
+      }
       currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content)); // Final render with preprocessing
       currentAssistantMessageDiv.classList.remove("streaming");
 
@@ -747,11 +779,12 @@ async function setupStreamListeners() {
       }
     }
     if (messageInput) {
-      messageInput.disabled = false;
+      messageInput.disabled = false; // This now means "allow sending again"
       // messageInput.focus();
     }
     currentAssistantMessageDiv = null;
     currentAssistantContentDiv = null;
+    isAIResponding = false; // Reset flag as AI has finished responding
     if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
   });
 
@@ -759,6 +792,11 @@ async function setupStreamListeners() {
   unlistenStreamError = await listen<StreamErrorPayload>("STREAM_ERROR", (event) => {
     console.error("STREAM_ERROR received:", event.payload);
     if (currentAssistantMessageDiv && currentAssistantContentDiv) {
+      // Remove streaming dots before setting error content
+      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+      if (existingDots) {
+        existingDots.remove();
+      }
       currentAssistantContentDiv.innerHTML = md.render(
         preprocessLatex(`Error: ${event.payload.error}`),
       ); // Preprocess LaTeX
@@ -769,17 +807,93 @@ async function setupStreamListeners() {
       addMessageToHistory("Shard", `Error: ${event.payload.error}`);
     }
     if (messageInput) {
-      messageInput.disabled = false;
+      messageInput.disabled = false; // This now means "allow sending again"
       // messageInput.focus();
     }
     currentAssistantMessageDiv = null;
     currentAssistantContentDiv = null;
+    isAIResponding = false; // Reset flag on stream error
   });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
   loadInitialSettings();
   setupStreamListeners(); // ADDED: Setup listeners on DOM load
+  await setInitialWindowGeometry(); // Set fixed window size and position
+
+  // --- Click-Through Logic ---
+  // Ensure the window is interactive when it gains focus
+  appWindow.onFocusChanged(async ({ payload: focused }) => {
+    console.log(`[ClickThrough] onFocusChanged event. Focused: ${focused}`); // Log focus change
+    if (focused) {
+      try {
+        await appWindow.setIgnoreCursorEvents(false);
+        console.log("[ClickThrough] Window focused, cursor events enabled.");
+      } catch (error) {
+        console.error("[ClickThrough] Error enabling cursor events on focus:", error);
+      }
+    } else {
+      // Optional: Log when window loses focus, might be relevant
+      console.log("[ClickThrough] Window lost focus.");
+    }
+  });
+
+  // Handle clicks to potentially enable click-through
+  document.addEventListener('mousedown', async (event) => {
+    const target = event.target as HTMLElement;
+    // Basic check to avoid errors if target is not an HTMLElement (e.g., SVGElement in some cases, though less common for this specific problem)
+    if (!target || typeof target.closest !== 'function') {
+      console.log("[ClickThrough] Event target is not an HTMLElement or doesn't support 'closest'. Ignoring.");
+      return;
+    }
+    console.log(`[ClickThrough] Mousedown event. Target: <${target.tagName}> id='${target.id || "none"}' class='${target.className || "none"}'`);
+
+    // Define selectors for all elements that should remain interactive
+    const interactiveSelectors = [
+      '#message-input', '#input-image-preview',
+      '#ocr-icon-container', '#clear-chat-button',
+      '#settings-toggle', '#settings-panel', // settings-panel and all its children
+      '#chat-history > *', // Any direct child of chat-history (messages, accordions, etc.)
+      '#input-area',
+      // General HTML tags that are usually interactive by nature
+      'button', 'textarea', 'input', 'select', 'details', 'summary',
+      // Potentially add specific IDs/classes of scrollbars if they become an issue.
+      // Add any other specific interactive elements by ID or class if needed
+    ];
+
+    let isInteractiveClick = false;
+    let matchedSelector = "none";
+    for (const selector of interactiveSelectors) {
+      if (target.closest(selector)) {
+        isInteractiveClick = true;
+        matchedSelector = selector;
+        break;
+      }
+    }
+
+    if (isInteractiveClick) {
+      console.log(`[ClickThrough] Click target matched interactive selector: '${matchedSelector}'. Window remains interactive.`);
+      // Ensure the window is interactive if an interactive element is clicked.
+      try {
+        await appWindow.setIgnoreCursorEvents(false);
+        // console.log("[ClickThrough] Ensured cursor events are enabled due to interactive click.");
+      } catch (error) {
+        console.error("[ClickThrough] Error ensuring cursor events enabled on interactive click:", error);
+      }
+    } else {
+      console.log("[ClickLogic] Click target did not match interactive selectors. Emitting 'js-request-toggle-window' to backend.");
+      try {
+        // We'll need a simple Rust command to re-emit an event from Rust.
+        // Let's assume a command like `trigger_toggle_window_event` for now.
+        // This command will live in Rust and do app_handle.emit("toggle-main-window", ())
+        await invoke("trigger_backend_window_toggle");
+        console.log("[ClickLogic] Successfully requested backend window toggle.");
+      } catch (error) {
+        console.error("[ClickLogic] Error requesting backend window toggle:", error);
+      }
+    }
+  });
+  // --- End Click-Through Logic ---
 
   if (apiKeyInput) {
     // Add input event listener with debounce for auto-saving
@@ -866,7 +980,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     messageInput.addEventListener("input", autoResizeTextarea);
 
     messageInput.addEventListener("keypress", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (event.key === "Enter" && !event.shiftKey && !isAIResponding) {
         // Allow Shift+Enter for newlines if desired
         event.preventDefault(); // Prevent default Enter behavior (like adding newline)
         handleSendMessage();
@@ -921,7 +1035,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 // --- Event Listener for Window Toggle ---
-const FADE_DURATION = 300; // ms - Should match CSS transition duration
+const FADE_DURATION = 200; // ms - Should match CSS transition duration
 
 // --- Function to handle clicks outside the settings panel ---
 function handleClickOutsideSettings(event: MouseEvent) {
@@ -936,9 +1050,17 @@ function handleClickOutsideSettings(event: MouseEvent) {
     }
   }
 }
-
 listen("toggle-main-window", async () => {
   console.log("toggle-main-window event received from backend!");
+
+  // Ensure cursor events are enabled when the window is toggled
+  try {
+    await appWindow.setIgnoreCursorEvents(false);
+    console.log("[ToggleWindow] Ensured cursor events are enabled.");
+  } catch (error) {
+    console.error("[ToggleWindow] Error enabling cursor events on toggle:", error);
+  }
+
   const mainWindow = await Window.getByLabel("main");
   if (!mainWindow) {
     console.error("Main window not found by label 'main'!");
@@ -985,3 +1107,4 @@ listen("toggle-main-window", async () => {
 });
 
 console.log("Frontend listener for toggle-main-window set up.");
+

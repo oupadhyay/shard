@@ -273,6 +273,16 @@ fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result
 // --- Tauri Commands ---
 
 #[tauri::command]
+fn trigger_backend_window_toggle(app_handle: AppHandle) -> Result<(), String> {
+    log::info!("[Backend] trigger_backend_window_toggle called from frontend.");
+    app_handle.emit("toggle-main-window", ()).map_err(|e| {
+        let err_msg = format!("Failed to emit toggle-main-window event from backend: {}", e);
+        log::error!("{}", err_msg);
+        err_msg
+    })
+}
+
+#[tauri::command]
 async fn capture_interactive_and_ocr(app_handle: AppHandle) -> Result<CaptureResult, String> {
     log::info!("'capture_interactive_and_ocr' command invoked.");
 
@@ -1284,7 +1294,8 @@ pub fn run() {
             capture_interactive_and_ocr,
             cleanup_temp_screenshot,
             get_gemini_api_key,
-            set_gemini_api_key
+            set_gemini_api_key,
+            trigger_backend_window_toggle
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

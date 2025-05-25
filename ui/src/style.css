@@ -43,18 +43,12 @@ body {
     height: 100%; /* Use min-height */
     overflow: hidden; /* Prevent scrollbars on body */
     /* Add the radial gradient background */
-    background: radial-gradient(
-        circle at bottom left,
-        rgba(80, 80, 80, 0.25) 0%,
-        transparent 45%
-    ); /* Adjust color/opacity/stop % as needed */
 }
 
 /* Container */
 .container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
     padding: 15px;
     box-sizing: border-box;
     background-color: transparent; /* Keep container transparent */
@@ -65,6 +59,11 @@ body {
     /* max-width: 800px; */
     margin: 0 auto;
     justify-content: flex-end; /* Push content towards the bottom */
+    background: radial-gradient(
+        circle at bottom left,
+        rgba(80, 80, 80, 0.7) 0%,
+        transparent 30%
+    ); /* Adjust color/opacity/stop % as needed */
 }
 
 /* Settings Area */
@@ -96,7 +95,7 @@ body {
 
 .settings button {
     padding: 8px 15px;
-    background-color: rgba(80, 80, 80, 0.1); /* More transparent */
+    background-color: rgba(80, 80, 80, 0.2); /* More transparent */
     border: none;
     border-radius: 8px; /* Increased */
     color: inherit;
@@ -114,6 +113,13 @@ body {
     margin-left: auto; /* Push status to the right */
 }
 
+#chat-history-container {
+    height: calc(100vh - 150px);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}
+
 /* Chat History - Fix Order & Bottom Alignment & Hide Scrollbar */
 #chat-history {
     flex-grow: 1;
@@ -123,6 +129,7 @@ body {
     justify-content: flex-end;
     gap: 12px;
     margin-bottom: 15px;
+    height: fit-content;
     /* position: relative; */ /* Removed: No longer needed for fade effect */
 
     /* Hide scrollbar */
@@ -159,17 +166,17 @@ body {
     opacity: 0.89; /* Apply opacity */
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); /* Add shadow for depth */
     backdrop-filter: blur(
-        5px
-    ); /* Optional: Add blur for more glassiness if desired - can impact performance */
+        50px
+    );
     animation: fadeInUp 0.3s ease-out; /* Apply animation */
 }
 
 .message.user {
-    background-color: rgba(60, 60, 60, 1);
+    background-color: rgba(60, 60, 60, 0.95);
 }
 
 .message.assistant {
-    background-color: rgba(75, 75, 75, 1);
+    background-color: rgba(75, 75, 75, 0.95);
 }
 
 .message > strong {
@@ -256,10 +263,10 @@ body {
 /* Styles for the new Settings Panel */
 #settings-panel {
     position: absolute;
-    top: 15px; /* Match container padding */
+    bottom: 150px; /* Match container padding */
     left: 15px;
     right: 15px;
-    background-color: rgba(40, 40, 40, 0.95); /* Darker, slightly more opaque */
+    background-color: rgba(40, 40, 40, 0.9); /* Darker, slightly more opaque */
     padding: 20px;
     border-radius: 15px;
     box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4); /* Added softer shadow */
@@ -418,7 +425,7 @@ body {
 /* General Tool Button Style */
 #tool-buttons button,
 #ocr-icon-container {
-    background: rgba(60, 60, 60, 0.5);
+    background: rgba(65, 65, 65, 0.95);
     border: none;
     color: var(--text-color);
     cursor: pointer;
@@ -432,7 +439,7 @@ body {
 
 #tool-buttons button:hover,
 #ocr-icon-container:hover {
-    background-color: rgba(100, 100, 100, 0.5);
+    background-color: rgba(100, 100, 100, 0.8);
 }
 
 #tool-buttons button svg,
@@ -512,6 +519,35 @@ body {
         transform: scale(1);
         opacity: 1;
     }
+}
+
+/* Streaming Dots Indicator during response streaming */
+.streaming-dots {
+    display: inline-block; /* To flow with text */
+    vertical-align: baseline; /* Align with text */
+    margin-left: 2px; /* Small space from text */
+}
+
+.streaming-dots span {
+    display: inline-block; /* Essential for individual dot animation and sizing */
+    width: 5px;
+    height: 5px;
+    background-color: rgba(255, 255, 255, 0.7);
+    border-radius: 50%;
+    margin: 0 1.5px; /* Adjust spacing between dots */
+    animation: pulse 1.4s infinite ease-in-out both;
+}
+
+.streaming-dots span:nth-child(1) {
+    animation-delay: -0.32s;
+}
+
+.streaming-dots span:nth-child(2) {
+    animation-delay: -0.16s;
+}
+
+.streaming-dots span:nth-child(3) {
+    animation-delay: 0s;
 }
 
 /* Reasoning Accordion Styles */
@@ -647,7 +683,7 @@ body.fade-in {
 }
 
 body.fade-out {
-    opacity: 0 !important;
+    opacity: 0.5 !important;
     transition: opacity 200ms ease-in-out;
 }
 

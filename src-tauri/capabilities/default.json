@@ -16,6 +16,7 @@
     "core:window:allow-outer-size",
     "core:window:allow-current-monitor",
     "core:window:allow-set-size",
+    "core:window:allow-set-ignore-cursor-events",
     "core:app:default",
     "core:resources:default",
     "core:menu:default",

@@ -237,7 +237,7 @@ body {
     flex-grow: 1; /* Allow wrapper to take available space */
     background-color: rgba(60, 60, 60, 0.9); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
-    padding: 8px 5px 8px 10px; /* Adjust padding T/R/B/L */
+    padding: 5px 5px 5px 8px; /* Adjust padding T/R/B/L */
 }
 
 #input-image-preview {
@@ -252,24 +252,6 @@ body {
 
 #input-image-preview.hidden {
     display: none;
-}
-
-#message-input {
-    flex-grow: 1;
-    padding: 10px 10px 10px 0; /* Adjust padding */
-    background-color: transparent; /* Make input transparent */
-    border: none;
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 1em;
-    outline: none; /* Remove focus outline */
-    /* Textarea specific styles */
-    resize: none; /* Disable manual resize handle */
-    overflow-y: hidden; /* Hide scrollbar, rely on JS for height */
-    line-height: 1.4; /* Match body line-height */
-    min-height: calc(1em * 1.4); /* Start at single line height */
-    font-family: inherit; /* Ensure font matches */
-    white-space: pre-wrap; /* Respect newlines and wrap */
-    word-wrap: break-word; /* Break long words */
 }
 
 /* Styles for the new Settings Panel */
@@ -740,7 +722,7 @@ body {
 
 #message-input {
     flex-grow: 1;
-    padding: 10px 10px 10px 0; /* Adjust padding */
+    padding: 5px 5px 5px 5px; /* Adjust padding */
     background-color: transparent; /* Make input transparent */
     border: none;
     color: rgba(255, 255, 255, 0.9);

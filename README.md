@@ -19,7 +19,8 @@ A Tauri application for easy interaction with AI models.
 ### In Progress Features
 
 *   Web Search (Idea 0.5.0 💡)
-*   YT Video Summarization (Idea 0.5.1 💡)
+*   YT Video Summarization (Idea 0.5.X 💡)
+*   Custom System Prompt (Idea 0.5.X 💡)
 
 Feel free to add more ideas in the Issues or contribute to the project with a PR!
 

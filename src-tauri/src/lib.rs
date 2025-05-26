@@ -19,6 +19,8 @@ use tauri_plugin_global_shortcut::{
 };
 use tesseract; // Uncommented
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
+use yahoo_finance_api as yfa; // Using an alias for brevity
+use time::OffsetDateTime; // For timestamp conversion
 
 // Default model if none is selected
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
@@ -32,6 +34,7 @@ struct AppConfig {
     api_key: Option<String>,
     selected_model: Option<String>,
     gemini_api_key: Option<String>, // Added for Gemini
+    enable_web_search: Option<bool>, // ADDED for web search toggle
 }
 
 const CONFIG_FILENAME: &str = "config.toml";
@@ -201,6 +204,181 @@ struct StreamErrorPayload {
     error: String,
 }
 
+// --- Web Search Event Payloads ---
+#[derive(Serialize, Clone, Debug)]
+struct ArticleLookupStartedPayload {
+    query: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct ArticleLookupCompletedPayload {
+    query: String,
+    success: bool,
+    summary: Option<String>,
+    source_name: Option<String>,
+    source_url: Option<String>,
+    error: Option<String>,
+}
+
+// --- ADDED: Weather Lookup Event Payloads ---
+#[derive(Serialize, Clone, Debug)]
+struct WeatherLookupStartedPayload {
+    location: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct WeatherLookupCompletedPayload {
+    location: String,
+    success: bool,
+    temperature: Option<f32>,
+    unit: Option<String>,
+    description: Option<String>,
+    error: Option<String>,
+}
+
+// --- Financial Data Event Payloads ---
+#[derive(Serialize, Clone, Debug)]
+struct FinancialDataStartedPayload {
+    query: String,
+    symbol: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct FinancialDataCompletedPayload {
+    query: String,
+    symbol: String,
+    success: bool,
+    data: Option<String>, // Formatted financial data string
+    error: Option<String>,
+}
+
+// --- ADDED: Wikipedia API Structures ---
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WikipediaQueryPage {
+    pageid: Option<i64>,
+    title: Option<String>,
+    extract: Option<String>,
+    missing: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WikipediaQuery {
+    pages: Vec<WikipediaQueryPage>, // Changed from HashMap<String, WikipediaQueryPage>
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WikipediaResponse {
+    batchcomplete: Option<bool>, // Changed from Option<String> to Option<bool>
+    query: Option<WikipediaQuery>,
+}
+
+// --- ADDED: Open-Meteo Geocoding API Structures ---
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GeocodingResult {
+    id: Option<f64>,
+    name: Option<String>,
+    latitude: Option<f32>,
+    longitude: Option<f32>,
+    country: Option<String>,
+    admin1: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GeocodingResponse {
+    results: Option<Vec<GeocodingResult>>,
+    generationtime_ms: Option<f32>,
+}
+
+// --- ADDED: Open-Meteo Weather API Structures ---
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WeatherCurrentUnits {
+    temperature_2m: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WeatherCurrentData {
+    time: Option<String>,
+    interval: Option<i32>,
+    temperature_2m: Option<f32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct WeatherResponse {
+    latitude: Option<f32>,
+    longitude: Option<f32>,
+    generationtime_ms: Option<f32>,
+    utc_offset_seconds: Option<i32>,
+    timezone: Option<String>,
+    timezone_abbreviation: Option<String>,
+    elevation: Option<f32>,
+    current_units: Option<WeatherCurrentUnits>,
+    current: Option<WeatherCurrentData>,
+}
+
+// --- ADDED: Wikipedia Lookup Function ---
+async fn perform_wikipedia_lookup(
+    client: &reqwest::Client,
+    search_term: &str,
+) -> Result<Option<(String, String, String)>, String> { // (summary, source_name, source_url)
+    let base_url = "https://en.wikipedia.org/w/api.php";
+    let params = [
+        ("action", "query"),
+        ("format", "json"),
+        ("titles", search_term),
+        ("prop", "extracts"),
+        ("exintro", "true"),
+        ("explaintext", "true"),
+        ("redirects", "1"),
+        ("formatversion", "2"),
+    ];
+    let request_url = client.get(base_url).query(&params).build().unwrap().url().to_string();
+    log::info!("Performing Wikipedia lookup. Request URL: {}", request_url);
+    match client.get(base_url).query(&params).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let response_text = response.text().await.map_err(|e| format!("Wikipedia: Failed to read response text: {}", e))?;
+            if status.is_success() {
+                match serde_json::from_str::<WikipediaResponse>(&response_text) {
+                    Ok(wiki_response) => {
+                        log::info!("Wikipedia: Successfully parsed JSON: {:#?}", wiki_response);
+                        if let Some(query_data) = wiki_response.query {
+                            if let Some(page) = query_data.pages.first() { // Changed from .values().next() to .first()
+                                if page.missing.is_some() {
+                                    log::info!("Wikipedia: Page '{}' does not exist.", search_term);
+                                    return Ok(None);
+                                }
+                                if let Some(extract) = &page.extract {
+                                    if !extract.trim().is_empty() {
+                                        let title = page.title.clone().unwrap_or_else(|| search_term.to_string());
+                                        let source_url = format!("https://en.wikipedia.org/wiki/{}", title.replace(" ", "_"));
+                                        log::info!("Wikipedia: Found extract for title '{}'", title);
+                                        return Ok(Some((extract.trim().to_string(), "Wikipedia".to_string(), source_url)));
+                                    }
+                                }
+                            }
+                        }
+                        log::info!("Wikipedia: No suitable extract for '{}'.", search_term);
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        log::error!("Wikipedia: Failed to parse JSON: {}. Raw: {}", e, response_text);
+                        Err(format!("Wikipedia JSON parse error: {}. Ensure response is valid JSON.", e))
+                    }
+                }
+            } else {
+                log::error!("Wikipedia: API error status {}: {}", status, response_text);
+                Err(format!("Wikipedia API error: {} - {}", status, response_text))
+            }
+        }
+        Err(e) => {
+            log::error!("Wikipedia: Network error: {}", e);
+            Err(format!("Wikipedia network error: {}", e))
+        }
+    }
+}
+
+
+
 // --- Screen Capture & OCR Helper Functions ---
 // Uncommented and kept as is
 fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result<String, String> {
@@ -267,6 +445,166 @@ fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result
             Ok(text)
         }
         Err(e) => Err(e),
+    }
+}
+
+// --- ADDED: Helper function to extract stock symbol ---
+fn extract_stock_symbol(query: &str) -> Option<String> {
+    log::info!("Attempting to extract stock symbol from query: '{}' using ticker-sniffer.", query);
+
+    // According to ticker-sniffer docs, `is_case_sensitive_doc_parsing = false`
+    // might be better for search query inputs, though it can increase false positives
+    // between nouns (e.g., "apple") and company names (e.g., "Apple").
+    match ticker_sniffer::extract_tickers_from_text(query, true) {
+        Ok(ticker_map) => {
+            if ticker_map.is_empty() {
+                log::warn!("ticker-sniffer found no symbols in query: '{}'", query);
+                None
+            } else {
+                // Find the ticker with the highest frequency.
+                // If there are multiple with the same highest frequency, pick the first one alphabetically.
+                let mut best_symbol: Option<String> = None;
+
+                // Sort by frequency (desc) then by symbol (asc) for tie-breaking
+                let mut sorted_tickers: Vec<(&String, &usize)> = ticker_map.iter().collect();
+                sorted_tickers.sort_by(|a, b| {
+                    b.1.cmp(a.1) // Sort by frequency descending
+                       .then_with(|| a.0.cmp(b.0)) // Then by symbol ascending
+                });
+
+                if let Some((symbol, freq)) = sorted_tickers.first() {
+                    log::info!(
+                        "ticker-sniffer extracted symbol: '{}' with frequency {} from query: '{}' (Full map: {:?})",
+                        symbol, freq, query, ticker_map
+                    );
+                    best_symbol = Some(symbol.to_string());
+                }
+
+                best_symbol
+            }
+        }
+        Err(e) => {
+            log::error!("ticker-sniffer failed to extract symbols from query '{}': {}", query, e);
+            None
+        }
+    }
+}
+
+// --- ADDED: Geocoding Function ---
+async fn geocode_location(
+    client: &reqwest::Client,
+    location_name: &str,
+) -> Result<Option<(f32, f32, String)>, String> { // (latitude, longitude, resolved_name)
+    let base_url = "https://geocoding-api.open-meteo.com/v1/search";
+    let params = [
+        ("name", location_name),
+        ("count", "1"),
+        ("language", "en"),
+        ("format", "json"),
+    ];
+    let request_url = client.get(base_url).query(&params).build().unwrap().url().to_string();
+    log::info!("Geocoding for '{}'. URL: {}", location_name, request_url);
+    match client.get(base_url).query(&params).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let response_text = response.text().await.map_err(|e| format!("Geocoding: Failed to read response text: {}", e))?;
+            if status.is_success() {
+                match serde_json::from_str::<GeocodingResponse>(&response_text) {
+                    Ok(geo_response) => {
+                        log::info!("Geocoding: Parsed JSON: {:#?}", geo_response);
+                        if let Some(results) = geo_response.results {
+                            if let Some(top) = results.first() {
+                                if let (Some(lat_val), Some(lon_val), Some(name_val)) = (top.latitude, top.longitude, &top.name) {
+                                    let resolved = format!("{}{}{}",
+                                        name_val,
+                                        top.admin1.as_ref().map_or_else(|| "".to_string(), |a| format!(", {}", a)),
+                                        top.country.as_ref().map_or_else(|| "".to_string(), |c| format!(", {}", c))
+                                    );
+                                    log::info!("Geocoding: Found for '{}': ({}, {}). Resolved: {}", location_name, lat_val, lon_val, resolved);
+                                    return Ok(Some((lat_val, lon_val, resolved))); // No deref needed for f32
+                                }
+                            }
+                        }
+                        log::info!("Geocoding: No coords for '{}'.", location_name);
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        log::error!("Geocoding: JSON parse error: {}. Raw: {}", e, response_text);
+                        Err(format!("Geocoding JSON error: {}. Ensure response is valid JSON.", e))
+                    }
+                }
+            } else {
+                log::error!("Geocoding: API error status {}: {}", status, response_text);
+                Err(format!("Geocoding API error: {} - {}", status, response_text))
+            }
+        }
+        Err(e) => {
+            log::error!("Geocoding: Network error: {}", e);
+            Err(format!("Geocoding network error: {}", e))
+        }
+    }
+}
+
+// --- ADDED: Financial Data Lookup Function ---
+async fn perform_financial_data_lookup(
+    _client: &reqwest::Client, // Not directly used by yfa, but kept for consistency if other libs need it
+    symbol: &str,
+) -> Result<String, String> {
+    log::info!(
+        "Performing financial data lookup for symbol: '{}' using yahoo_finance_api",
+        symbol
+    );
+
+    let provider = match yfa::YahooConnector::new() {
+        Ok(p) => p,
+        Err(e) => {
+            let err_msg = format!("Failed to create YahooConnector: {}", e.to_string());
+            log::error!("{}", err_msg);
+            return Err(err_msg);
+        }
+    };
+
+    match provider.get_latest_quotes(symbol, "1d").await { // Get latest daily quote
+        Ok(response) => {
+            if let Some(quote) = response.last_quote().ok() { // last_quote returns Result<Quote, Error>
+                // Convert Unix timestamp to readable date
+                // The timestamp from yahoo_finance_api::Quote is u64
+                let dt = OffsetDateTime::from_unix_timestamp(quote.timestamp as i64)
+                    .map_err(|e| format!("Failed to convert timestamp: {}", e))?;
+
+                let date_str = dt.format(&time::format_description::parse("[year]-[month]-[day]").map_err(|e| format!("Failed to parse date format: {}",e))?).map_err(|e| format!("Failed to format date: {}",e))?;
+
+                let formatted_data = format!(
+                    "Latest data for {}: Date: {}, Open: {:.2}, High: {:.2}, Low: {:.2}, Close: {:.2}, Volume: {}",
+                    symbol.to_uppercase(),
+                    date_str,
+                    quote.open,
+                    quote.high,
+                    quote.low,
+                    quote.close,
+                    quote.volume
+                );
+                log::info!(
+                    "Financial data lookup successful for symbol: '{}'. Data: {}",
+                    symbol,
+                    formatted_data
+                );
+                Ok(formatted_data)
+            } else {
+                let msg = format!("No quote data found for symbol {}.", symbol);
+                log::warn!("Financial data lookup for symbol '{}': {}", symbol, msg);
+                Err(msg)
+            }
+        }
+        Err(e) => {
+            let err_msg = format!(
+                "Failed to retrieve financial data for {} from yahoo_finance_api: {}",
+                symbol,
+                e.to_string()
+            );
+            log::error!("{}", err_msg);
+            Err(err_msg)
+        }
     }
 }
 
@@ -539,7 +877,7 @@ async fn send_text_to_model(
         role: "system".to_string(), // This role will be adapted by call_gemini_api
         content: SYSTEM_INSTRUCTION.to_string(),
     });
-    final_messages.extend(messages.into_iter()); // Append original messages
+    // Original user messages will be added after potential web search or financial data context
 
     let config = load_config(&app_handle)?;
 
@@ -552,6 +890,282 @@ async fn send_text_to_model(
     });
 
     log::info!("Processing request for model: {}", model_name);
+
+    // --- Web Search Logic --- (Now Article Lookup)
+    let mut article_lookup_performed_successfully = false;
+    let mut article_lookup_result_text: Option<String> = None;
+    // --- Financial Data Logic ---
+    let mut financial_data_fetched_successfully = false;
+    let mut financial_data_result_text: Option<String> = None;
+    // --- ADDED: Weather Lookup Logic State ---
+    let mut weather_lookup_performed_successfully = false;
+    let mut weather_lookup_result_text: Option<String> = None;
+
+    // Create reqwest client once
+    let client = reqwest::Client::new();
+
+
+    if config.enable_web_search.unwrap_or(true) {
+        if let Some(last_user_message) = messages.last() {
+            if last_user_message.role == "user" {
+                let user_query = last_user_message.content.trim();
+                let query_words: Vec<&str> = user_query.split_whitespace().collect();
+
+                if query_words.len() >= 1 {
+                    log::info!("Considering external data lookup for query: '{}'", user_query);
+
+                    let decider_prompt =
+                        "You are an intelligent assistant that categorizes user queries to determine the best data retrieval strategy.\n".to_string() +
+                        "Analyze the user\'s query and decide if it primarily requires:\n" +
+                        "1. Factual information lookup about a specific topic, person, place, or concept (e.g., definitions, history, general knowledge). If so, respond with only the exact string \"WIKIPEDIA_LOOKUP\".\n" +
+                        "   Examples: \"What is photosynthesis?\", \"Tell me about the Eiffel Tower\", \"Who was Marie Curie?\"\n" +
+                        "2. Current weather conditions for a specific location. If so, respond with only the exact string \"WEATHER_LOOKUP\".\n" +
+                        "   Examples: \"weather in San Francisco\", \"what's the temperature in London?\", \"Is it raining in Tokyo?\"\n" +
+                        "3. Specific financial market data for a publicly traded stock or symbol. If so, respond with only the exact string \"FINANCIAL_DATA\".\n" +
+                        "   Examples: \"What is the stock price of GOOGL?\", \"AAPL stock quote\"\n" +
+                        "4. No external data lookup, meaning the query is conversational, a command, a creative request, or can be answered from general LLM knowledge. If so, respond with only the exact string \"NO_LOOKUP\".\n" +
+                        "   Examples: \"Tell me a joke.\", \"Summarize this text for me: ...\", \"What is the capital of Germany (if already known by LLM)?\"\n" +
+                        &format!("User query: '{}'\n", user_query) +
+                        "Based on this query, respond with one of the exact strings: \"WIKIPEDIA_LOOKUP\", \"WEATHER_LOOKUP\", \"FINANCIAL_DATA\", or \"NO_LOOKUP\".";
+
+                    let decider_messages = vec![ChatMessage { role: "user".to_string(), content: decider_prompt }];
+                    let decider_model_name = "gemini-2.0-flash".to_string();
+
+                    let decider_gemini_api_key_string = match config.gemini_api_key.clone() {
+                        Some(key) if !key.is_empty() => key,
+                        _ => {
+                            log::warn!("Gemini API key not set for decider. Defaulting to NO_LOOKUP.");
+                            String::new()
+                        }
+                    };
+
+                    let mut decision = "NO_LOOKUP".to_string(); // Initialize decision
+                    if !decider_gemini_api_key_string.is_empty() {
+                        match call_gemini_api_non_streaming(&client, decider_messages, &decider_gemini_api_key_string, decider_model_name).await {
+                            Ok(decider_response_text) => {
+                                let cleaned_response = decider_response_text.trim().to_uppercase();
+                                log::info!("Decider model response for query '{}': '{}'", user_query, cleaned_response);
+                                if ["WIKIPEDIA_LOOKUP", "WEATHER_LOOKUP", "FINANCIAL_DATA", "NO_LOOKUP"].contains(&cleaned_response.as_str()) {
+                                    decision = cleaned_response;
+                                } else {
+                                    log::warn!("Decider model returned an unexpected response: '{}'. Defaulting to NO_LOOKUP.", decider_response_text);
+                                    decision = "NO_LOOKUP".to_string();
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Error calling decider model for query '{}': {}. Defaulting to NO_LOOKUP.", user_query, e);
+                                decision = "NO_LOOKUP".to_string();
+                            }
+                        }
+                    } else {
+                        log::warn!("Decider Gemini API key is empty. Defaulting to NO_LOOKUP for query '{}'.", user_query);
+                        decision = "NO_LOOKUP".to_string(); // Ensure decision is NO_LOOKUP if key is empty
+                    }
+
+                    // Replace if decision == "WEB_SEARCH" logic with new cases
+                    if decision == "WIKIPEDIA_LOOKUP" {
+                        let mut effective_search_term = user_query.to_string();
+                        match extract_wikipedia_search_term(&client, user_query, decider_gemini_api_key_string.clone(), "gemini-2.0-flash".to_string()).await {
+                            Ok(extracted_term) => {
+                                effective_search_term = extracted_term;
+                            }
+                            Err(_) => { /* Error already logged in extractor, use_query remains default */ }
+                        }
+                        log::info!("Wikipedia lookup DECIDED for query: '{}', effective search term: '{}'", user_query, effective_search_term);
+
+                        if let Err(e) = window.emit("ARTICLE_LOOKUP_STARTED", ArticleLookupStartedPayload { query: effective_search_term.clone() }) {
+                            log::warn!("Failed to emit ARTICLE_LOOKUP_STARTED event: {}", e);
+                        }
+                        match perform_wikipedia_lookup(&client, &effective_search_term).await {
+                            Ok(Some((summary, source_name, source_url))) => {
+                                log::info!("Wikipedia lookup successful for term: '{}'. Summary found.", effective_search_term);
+                                if let Err(e) = window.emit("ARTICLE_LOOKUP_COMPLETED", ArticleLookupCompletedPayload {
+                                    query: effective_search_term.clone(), // Use effective term in event
+                                    success: true,
+                                    summary: Some(summary.clone()),
+                                    source_name: Some(source_name.clone()),
+                                    source_url: Some(source_url.clone()),
+                                    error: None,
+                                }) {
+                                    log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (success) event: {}", e);
+                                }
+                                article_lookup_result_text = Some(format!(
+                                    "Context from Wikipedia for '{}' (based on user query '{}'):\n{}\n\nSource: '{}' ({})",
+                                    effective_search_term, user_query, summary, source_name, source_url
+                                ));
+                                article_lookup_performed_successfully = true;
+                            }
+                            Ok(None) => {
+                                log::info!("Wikipedia lookup for term '{}' completed, but no summary found.", effective_search_term);
+                               if let Err(e) = window.emit("ARTICLE_LOOKUP_COMPLETED", ArticleLookupCompletedPayload {
+                                    query: effective_search_term.clone(),
+                                    success: true,
+                                    summary: None,
+                                    source_name: None,
+                                    source_url: None,
+                                    error: None,
+                                }) {
+                                    log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (no summary) event: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Wikipedia lookup failed for term '{}'. Error: {}", effective_search_term, e);
+                                if let Err(emit_err) = window.emit("ARTICLE_LOOKUP_COMPLETED", ArticleLookupCompletedPayload {
+                                    query: effective_search_term.clone(),
+                                    success: false,
+                                    summary: None,
+                                    source_name: None,
+                                    source_url: None,
+                                    error: Some(e.clone()),
+                                }) {
+                                    log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (error) event: {}", emit_err);
+                                }
+                            }
+                        }
+                    } else if decision == "WEATHER_LOOKUP" {
+                        log::info!("Weather lookup DECIDED for query: '{}'", user_query);
+
+                        // Pass the original user_query to perform_weather_lookup,
+                        // which will internally call the location extractor.
+                        // Also pass the Gemini API key and a model for the extractor.
+                        if let Err(e) = window.emit("WEATHER_LOOKUP_STARTED", WeatherLookupStartedPayload { location: user_query.to_string() }) {
+                            log::warn!("Failed to emit WEATHER_LOOKUP_STARTED event: {}", e);
+                        }
+                        match perform_weather_lookup(&client, user_query, &decider_gemini_api_key_string, "gemini-2.0-flash".to_string()).await {
+                            Ok(Some((temp, unit, description, resolved_location))) => {
+                                log::info!("Weather lookup successful for '{}' (resolved: {}). Temp: {} {}", user_query, resolved_location, temp, unit);
+                                if let Err(e) = window.emit("WEATHER_LOOKUP_COMPLETED", WeatherLookupCompletedPayload {
+                                    location: resolved_location.clone(), // Use the (potentially more precise) resolved location from geocoding
+                                    success: true,
+                                    temperature: Some(temp),
+                                    unit: Some(unit.clone()),
+                                    description: Some(description.clone()),
+                                    error: None,
+                                }) {
+                                    log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED (success) event: {}", e);
+                                }
+                                weather_lookup_result_text = Some(format!(
+                                    "Current weather for {}: {} {}. {}.",
+                                    resolved_location, temp, unit, description
+                                ));
+                                weather_lookup_performed_successfully = true;
+                            }
+                            Ok(None) => {
+                                log::info!("Weather lookup for '{}' completed, but no weather data found (likely geocoding or location extraction failed, or no data for coords).", user_query);
+                                if let Err(e) = window.emit("WEATHER_LOOKUP_COMPLETED", WeatherLookupCompletedPayload {
+                                    location: user_query.to_string(), // Fallback to original query for event if resolution failed
+                                    success: true,
+                                    temperature: None,
+                                    unit: None,
+                                    description: None,
+                                    error: None,
+                                }) {
+                                    log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED (no data) event: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Weather lookup failed for '{}'. Error: {}", user_query, e);
+                                if let Err(emit_err) = window.emit("WEATHER_LOOKUP_COMPLETED", WeatherLookupCompletedPayload {
+                                    location: user_query.to_string(),
+                                    success: false,
+                                    temperature: None,
+                                    unit: None,
+                                    description: None,
+                                    error: Some(e.clone()),
+                                }) {
+                                    log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED (error) event: {}", emit_err);
+                                }
+                            }
+                        }
+                    } else if decision == "FINANCIAL_DATA" {
+                        log::info!("Financial data lookup DECIDED for query: '{}'", user_query);
+                        if let Some(symbol) = extract_stock_symbol(user_query) {
+                            log::info!("Extracted symbol '{}' for financial data lookup.", symbol);
+                            if let Err(e) = window.emit("FINANCIAL_DATA_STARTED", FinancialDataStartedPayload { query: user_query.to_string(), symbol: symbol.clone() }) {
+                                log::warn!("Failed to emit FINANCIAL_DATA_STARTED event: {}", e);
+                            }
+
+                            match perform_financial_data_lookup(&client, &symbol).await {
+                                Ok(data) => {
+                                    log::info!("Financial data lookup successful for symbol: '{}'.", symbol);
+                                    if let Err(e) = window.emit("FINANCIAL_DATA_COMPLETED", FinancialDataCompletedPayload {
+                                        query: user_query.to_string(),
+                                        symbol: symbol.clone(),
+                                        success: true,
+                                        data: Some(data.clone()),
+                                        error: None,
+                                    }) {
+                                        log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (success) event: {}", e);
+                                    }
+                                    financial_data_result_text = Some(format!(
+                                        "Financial data for {}\n{}",
+                                        symbol, data
+                                    ));
+                                    financial_data_fetched_successfully = true;
+                                }
+                                Err(e) => {
+                                    log::error!("Financial data lookup failed for symbol: '{}'. Error: {}", symbol, e);
+                                    if let Err(emit_err) = window.emit("FINANCIAL_DATA_COMPLETED", FinancialDataCompletedPayload {
+                                        query: user_query.to_string(),
+                                        symbol: symbol.clone(),
+                                        success: false,
+                                        data: None,
+                                        error: Some(e.clone()),
+                                    }) {
+                                        log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (error) event: {}", emit_err);
+                                    }
+                                }
+                            }
+                        } else {
+                            log::warn!("Financial data lookup decided, but could not extract symbol from query: '{}'. Skipping financial lookup.", user_query);
+                            // Emit a FINANCIAL_DATA_COMPLETED event to inform the frontend about the symbol extraction failure.
+                            if let Err(e) = window.emit("FINANCIAL_DATA_COMPLETED", FinancialDataCompletedPayload {
+                                query: user_query.to_string(),
+                                symbol: user_query.to_string(), // Use original query as a fallback for display
+                                success: false,
+                                data: None,
+                                error: Some("Could not identify a stock symbol in your query".to_string()),
+                            }) {
+                                log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (symbol extraction failure) event: {}", e);
+                            }
+                        }
+                    } else { // NO_LOOKUP
+                        log::info!("External data lookup (Web/Financial) NOT decided for query: '{}'", user_query);
+                    }
+                }
+            }
+        }
+    }
+
+    // Construct final message list for LLM
+    if article_lookup_performed_successfully && article_lookup_result_text.is_some() {
+        final_messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Context from Wikipedia lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                article_lookup_result_text.unwrap()
+            ),
+        });
+    } else if weather_lookup_performed_successfully && weather_lookup_result_text.is_some() {
+        final_messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Context from Weather lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                weather_lookup_result_text.unwrap()
+            ),
+        });
+    } else if financial_data_fetched_successfully && financial_data_result_text.is_some() {
+        final_messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Context from Financial data lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                financial_data_result_text.unwrap()
+            ),
+        });
+    }
+
+    // Append original user messages
+    final_messages.extend(messages.into_iter());
 
     // Check if the model is a Gemini model
     if model_name.starts_with("gemini-") || model_name.starts_with("google/") {
@@ -571,6 +1185,7 @@ async fn send_text_to_model(
         log::info!("Using Gemini API for model: {}", model_name);
 
         match call_gemini_api(
+            &client, // Pass client
             final_messages,
             gemini_api_key,
             model_name.replace("google/", ""),
@@ -603,7 +1218,7 @@ async fn send_text_to_model(
             model_name,
             DEFAULT_MODEL
         );
-        match call_openrouter_api(final_messages, api_key, model_name, window.clone()).await {
+        match call_openrouter_api(&client, final_messages, api_key, model_name, window.clone()).await { // Pass client
             Ok(_) => Ok(()),
             Err(e) => {
                 let _ = window.emit("STREAM_ERROR", StreamErrorPayload { error: e.clone() });
@@ -645,9 +1260,12 @@ async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result
     let allowed_models = vec![
         "deepseek/deepseek-chat-v3-0324:free",
         "deepseek/deepseek-r1:free",
-        "gemini-2.0-flash",
-        "gemini-2.5-flash-preview-04-17",
+        "gemini-2.0-flash", // Keep this for potential direct use or alias
+        "gemini-2.5-flash-preview-04-17", // This is the "Gemini 2.5 Flash (non-thinking)"
+        "google/gemini-2.0-flash", // Alias for gemini-2.0-flash for consistency
+        "google/gemini-2.5-flash-preview-04-17", // Alias for gemini-2.5-flash
         "gemini-2.5-flash-preview-04-17#thinking-enabled",
+        "google/gemini-2.5-flash-preview-04-17#thinking-enabled", // Alias
     ];
     // Updated check to be more specific
     if !allowed_models.contains(&model_name.as_str()) {
@@ -688,16 +1306,31 @@ async fn set_gemini_api_key(key: String, app_handle: AppHandle) -> Result<(), St
     save_config(&app_handle, &config)
 }
 
+// --- ADDED: Command to set web search preference ---
+#[tauri::command]
+async fn set_enable_web_search(enable: bool, app_handle: AppHandle) -> Result<(), String> {
+    let mut config = load_config(&app_handle).unwrap_or_else(|e| {
+        log::warn!("Failed to load config when setting web search preference: {}. Using default.", e);
+        AppConfig::default()
+    });
+    config.enable_web_search = Some(enable);
+    save_config(&app_handle, &config)
+}
+
+// --- ADDED: Command to get web search preference ---
+#[tauri::command]
+async fn get_enable_web_search(app_handle: AppHandle) -> Result<bool, String> {
+    load_config(&app_handle).map(|config| config.enable_web_search.unwrap_or(true)) // Default to true
+}
+
 // --- API Call Logic ---
 async fn call_gemini_api(
+    client: &reqwest::Client, // MODIFIED: Accept client
     messages: Vec<ChatMessage>,
     api_key: String,
     model_identifier_from_config: String, // RENAMED for clarity
     window: Window,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
-
-    // MODIFIED: Logic to handle model identifier and generation_config
     let mut actual_model_name_for_api = model_identifier_from_config.clone();
     let mut gen_config: Option<GenerationConfigForGemini> = None;
 
@@ -925,12 +1558,12 @@ async fn call_gemini_api(
 }
 
 async fn call_openrouter_api(
+    client: &reqwest::Client, // MODIFIED: Accept client
     messages: Vec<ChatMessage>,
     api_key: String,
     model_name: String,
     window: Window,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
     let api_url = "https://openrouter.ai/api/v1/chat/completions";
     let mut request_payload = ChatCompletionRequest {
         model: model_name.clone(),
@@ -1131,11 +1764,272 @@ async fn call_openrouter_api(
     }
 }
 
+// --- ADDED: Non-streaming Gemini API call function ---
+async fn call_gemini_api_non_streaming(
+    client: &reqwest::Client,
+    messages: Vec<ChatMessage>,
+    api_key_slice: &str, // Changed parameter name for clarity
+    model_name: String,
+) -> Result<String, String> {
+    if api_key_slice.is_empty() {
+        return Err("API key is empty for non-streaming Gemini call".to_string());
+    }
+    let api_url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model_name, api_key_slice
+    );
+
+    // For a simple YES/NO decider, complex generation_config is not needed.
+    // We can omit it or send a minimal one if required by the API.
+    // For now, omitting `generation_config` for simplicity for the decider call.
+    let request_payload = GeminiChatCompletionRequest {
+        contents: messages
+            .into_iter()
+            .map(|msg| GeminiContent {
+                parts: vec![GeminiPart { text: msg.content }],
+                role: Some(msg.role), // Directly use the role, assuming "user" for decider prompt
+            })
+            .collect(),
+        generation_config: None, // No special generation config for the simple decider
+    };
+
+    // log::info!(
+    //     "Sending NON-STREAMING request to Gemini API for model: {}. Payload: {:?}",
+    //     model_name,
+    //     request_payload
+    // );
+
+    match client
+        .post(&api_url)
+        .header("Content-Type", "application/json")
+        .json(&request_payload)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<GeminiChatCompletionResponse>().await {
+                    Ok(gemini_response) => {
+                        if let Some(candidate) = gemini_response.candidates.get(0) {
+                            if let Some(part) = candidate.content.parts.get(0) {
+                                log::debug!("Non-streaming Gemini response text: {}", part.text);
+                                Ok(part.text.clone())
+                            } else {
+                                Err("Non-streaming Gemini response: No content parts found".to_string())
+                            }
+                        } else {
+                            Err("Non-streaming Gemini response: No candidates found".to_string())
+                        }
+                    }
+                    Err(e) => Err(format!(
+                        "Failed to parse non-streaming Gemini JSON response: {}",
+                        e
+                    )),
+                }
+            } else {
+                let status = response.status();
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body from Gemini (non-streaming)".to_string());
+                log::error!(
+                    "Gemini API (non-streaming) request failed with status {}: {}",
+                    status,
+                    error_text
+                );
+                Err(format!(
+                    "Gemini API (non-streaming) request failed: {} - {}",
+                    status, error_text
+                ))
+            }
+        }
+        Err(e) => {
+            log::error!("Network request to Gemini API (non-streaming) failed: {}", e);
+            Err(format!(
+                "Gemini API (non-streaming) network request failed: {}",
+                e
+            ))
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 fn window_should_become_key(_panel: Panel) -> bool {
     log::info!("NSPanelDelegate: windowShouldBecomeKey called, returning false to prevent focus.");
     false
+}
+
+// --- ADDED: Location Extractor Function for Geocoding ---
+async fn extract_location_for_geocoding(
+    client: &reqwest::Client,
+    user_query: &str,            // The full user query, e.g., "what is the weather in Paris, France?"
+    gemini_api_key: &str,      // API key as a slice
+    model_name: String,          // Model name for Gemini
+) -> Result<String, String> {    // Returns the extracted location string or an error
+    let extractor_prompt = format!(
+        "{}{}{}{}{}{}{}{}{}{}",
+        "You are an expert at identifying the geographical location mentioned in a user\'s query about weather.\n",
+        "Given the user query, extract only the location (city, state, country, etc.). Do not include phrases like \"weather in\", \"what is the temperature in\", etc.\n",
+        "For example:\n",
+        "- User Query: \"weather in San Francisco, CA\" -> Location: \"San Francisco, CA\"\n",
+        "- User Query: \"what is the temperature in London today?\" -> Location: \"London\"\n",
+        "- User Query: \"Is it raining in Tokyo, Japan? Show me the forecast.\" -> Location: \"Tokyo, Japan\"\n",
+        "- User Query: \"Paris forecast\" -> Location: \"Paris\"\n",
+        "Output only the location itself.\n\n",
+        format!("User Query: '{}'\n", user_query),
+        "Location:"
+    );
+
+    let extractor_messages = vec![ChatMessage { role: "user".to_string(), content: extractor_prompt }];
+
+    log::info!("Requesting location extraction for geocoding from query: '{}'", user_query);
+
+    match call_gemini_api_non_streaming(client, extractor_messages, gemini_api_key, model_name).await {
+        Ok(extracted_location_raw) => {
+            let extracted_location = extracted_location_raw.trim().trim_matches('"').to_string();
+            log::info!("Extracted location for geocoding: '{}' from original query: '{}'", extracted_location, user_query);
+            if extracted_location.is_empty() {
+                log::warn!("Location extractor for geocoding returned empty. Falling back to original query (trimmed).");
+                Ok(user_query.trim().to_string()) // Fallback, though less ideal
+            } else {
+                Ok(extracted_location)
+            }
+        }
+        Err(e) => {
+            log::error!("Error calling location extractor for geocoding (query: '{}'): {}. Falling back to original query (trimmed).", user_query, e);
+            Ok(user_query.trim().to_string()) // Fallback on error
+        }
+    }
+}
+
+// --- ADDED: Wikipedia Search Term Extractor Function ---
+async fn extract_wikipedia_search_term(
+    client: &reqwest::Client,
+    user_query: &str,
+    gemini_api_key_string: String,
+    model_name: String,
+) -> Result<String, String> {
+    let extractor_prompt = format!(
+        "You are an expert at identifying the core subject or named entity in a user's query that is most suitable for a Wikipedia search.\n
+        Given the user query, extract the most concise and accurate search term for Wikipedia. Focus on the main topic, person, place, or concept.\n
+        For example:\n
+        - User Query: \"Tell me more about the history of the Eiffel Tower in Paris.\" -> Search Term: \"Eiffel Tower\"\n
+        - User Query: \"Who was the first president of the United States?\" -> Search Term: \"First President of the United States\" (or \"George Washington\" if context implies)\n
+        - User Query: \"What are the symptoms of influenza?\" -> Search Term: \"Influenza\"\n
+        - User Query: \"Explain quantum entanglement for me.\" -> Search Term: \"Quantum entanglement\"\n
+        Do not include conversational phrases like 'tell me about', 'what is', 'who was'. Output only the search term itself.\n\n
+        User Query: '{}'\n
+        Search Term:",
+        user_query
+    );
+
+
+    let extractor_messages = vec![ChatMessage { role: "user".to_string(), content: extractor_prompt }];
+
+    log::info!("Requesting Wikipedia search term extraction for query: '{}'", user_query);
+
+    // Using the existing non-streaming Gemini call function
+    match call_gemini_api_non_streaming(client, extractor_messages, &gemini_api_key_string, model_name).await {
+        Ok(extracted_term_raw) => {
+            let extracted_term = extracted_term_raw.trim().trim_matches('"').to_string(); // Remove quotes and trim
+            log::info!("Extracted Wikipedia search term: '{}' for original query: '{}'", extracted_term, user_query);
+            if extracted_term.is_empty() {
+                log::warn!("Wikipedia search term extractor returned empty. Falling back to original query.");
+                Ok(user_query.to_string()) // Fallback to original query if extraction is empty
+            } else {
+                Ok(extracted_term)
+            }
+        }
+        Err(e) => {
+            log::error!("Error calling Wikipedia search term extractor for query '{}': {}. Falling back to original query.", user_query, e);
+            Ok(user_query.to_string()) // Fallback to original query on error
+        }
+    }
+}
+
+// --- UPDATED: Weather Lookup Function (uses location extractor) ---
+async fn perform_weather_lookup(
+    client: &reqwest::Client,
+    original_user_query: &str, // This is the full query like "weather in Paris"
+    gemini_api_key_for_extractor: &str, // API key for the extractor LLM call
+    extractor_model_name: String // Model for the extractor LLM call
+) -> Result<Option<(f32, String, String, String)>, String> { // (temp, unit, description, resolved_location)
+
+    // 1. Extract location using the LLM extractor
+    let location_to_geocode = match extract_location_for_geocoding(
+        client,
+        original_user_query,
+        gemini_api_key_for_extractor,
+        extractor_model_name
+    ).await {
+        Ok(loc) => loc,
+        Err(e) => {
+            log::error!("Weather: Location extraction step failed for query '{}': {}. No geocoding will be attempted.", original_user_query, e);
+            return Err(format!("Location extraction failed: {}", e)); // Propagate error if extraction itself fails badly
+        }
+    };
+
+    // 2. Geocode the extracted location
+    match geocode_location(client, &location_to_geocode).await {
+        Ok(Some((lat, lon, resolved_geocoded_name))) => {
+            log::info!("Geocoded extracted location '{}' to ({}, {}), name: {}", location_to_geocode, lat, lon, resolved_geocoded_name);
+            let base_url = "https://api.open-meteo.com/v1/forecast";
+            let params = [
+                ("latitude", lat.to_string()),
+                ("longitude", lon.to_string()),
+                ("current", "temperature_2m".to_string()),
+                ("temperature_unit", "celsius".to_string()),
+                ("wind_speed_unit", "kmh".to_string()),
+                ("precipitation_unit", "mm".to_string()),
+                ("timezone", "auto".to_string()),
+            ];
+            let request_url = client.get(base_url).query(&params).build().unwrap().url().to_string();
+            log::info!("Weather lookup for ({}, {}). URL: {}", lat, lon, request_url);
+            match client.get(base_url).query(&params).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    let response_text = response.text().await.map_err(|e| format!("Weather: Failed to read response text: {}", e))?;
+                    if status.is_success() {
+                        match serde_json::from_str::<WeatherResponse>(&response_text) {
+                            Ok(weather_data) => {
+                                log::info!("Weather: Parsed JSON: {:#?}", weather_data);
+                                if let Some(curr) = weather_data.current {
+                                    if let (Some(temp_val), Some(units)) = (curr.temperature_2m, weather_data.current_units) {
+                                        let unit = units.temperature_2m.unwrap_or_else(|| "°C".to_string());
+                                        let desc = format!("Current temperature in {}", resolved_geocoded_name);
+                                        log::info!("Weather: Found {} {} for {}", temp_val, unit, resolved_geocoded_name);
+                                        return Ok(Some((temp_val, unit, desc, resolved_geocoded_name.clone()))); // No deref needed for f32
+                                    }
+                                }
+                                log::info!("Weather: No current data for ({}, {}).", lat, lon);
+                                Ok(None)
+                            }
+                            Err(e) => {
+                                log::error!("Weather: JSON parse error for ({}, {}): {}. Raw: {}", lat, lon, e, response_text);
+                                Err(format!("Weather JSON error: {}. Ensure response is valid JSON.", e))
+                            }
+                        }
+                    } else {
+                        log::error!("Weather: API error for ({}, {}) status {}: {}", lat, lon, status, response_text);
+                        Err(format!("Weather API error: {} - {}", status, response_text))
+                    }
+                }
+                Err(e) => {
+                    log::error!("Weather: Network error for ({}, {}): {}", lat, lon, e);
+                    Err(format!("Weather network error: {}", e))
+                }
+            }
+        }
+        Ok(None) => {
+            log::warn!("Weather: Geocoding failed for '{}'.", location_to_geocode);
+            Ok(None)
+        }
+        Err(e) => {
+            log::error!("Weather: Geocoding step failed for '{}': {}", location_to_geocode, e);
+            Err(e)
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1295,7 +2189,9 @@ pub fn run() {
             cleanup_temp_screenshot,
             get_gemini_api_key,
             set_gemini_api_key,
-            trigger_backend_window_toggle
+            trigger_backend_window_toggle,
+            set_enable_web_search,
+            get_enable_web_search
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

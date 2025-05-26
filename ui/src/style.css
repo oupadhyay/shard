@@ -58,12 +58,12 @@ body {
     /* Remove max-width to allow full width */
     /* max-width: 800px; */
     margin: 0 auto;
-    justify-content: flex-end; /* Push content towards the bottom */
     background: radial-gradient(
         circle at bottom left,
-        rgba(80, 80, 80, 0.7) 0%,
+        rgba(80, 80, 80, 0.8) 0%,
         transparent 30%
     ); /* Adjust color/opacity/stop % as needed */
+    height: 100vh; /* Ensure container takes full viewport height */
 }
 
 /* Settings Area */
@@ -114,23 +114,27 @@ body {
 }
 
 #chat-history-container {
-    height: calc(100vh - 150px);
+    /* height: calc(100vh - 150px); */ /* REMOVE: Height will be flexible */
+    flex-grow: 1; /* Allow it to take up space above the fixed input area */
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    /* justify-content: flex-end; */ /* Handled by #chat-history now */
+    overflow: hidden; /* Prevent this container from scrolling, #chat-history will scroll */
+    position: relative; /* For potential future absolute positioned children if any */
 }
 
 /* Chat History - Fix Order & Bottom Alignment & Hide Scrollbar */
 #chat-history {
-    flex-grow: 1;
+    flex-grow: 1; /* Grow to fill chat-history-container */
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: flex-end; /* Keeps messages at the bottom */
     gap: 12px;
-    margin-bottom: 15px;
-    height: fit-content;
-    /* position: relative; */ /* Removed: No longer needed for fade effect */
+    /* margin-bottom: 15px; */ /* REMOVE: Will be handled by dynamic padding-bottom */
+    /* height: fit-content; */ /* REMOVE: Should fill available space */
+    height: 100%; /* Fill the chat-history-container */
+    box-sizing: border-box; /* Include padding in height */
 
     /* Hide scrollbar */
     -ms-overflow-style: none; /* IE and Edge */
@@ -208,22 +212,30 @@ body {
 
 /* Input Area */
 #input-area {
-    /* Target ID for specificity */
     display: flex;
-    align-items: center; /* Align items vertically */
+    align-items: center;
     gap: 10px;
-    background-color: rgba(45, 45, 45, 0.4); /* Slightly less opaque for blur */
-    border-radius: 25px; /* Make the whole bar rounded */
-    margin-top: auto; /* Ensure it stays at the bottom (works with container flex-end) */
-    backdrop-filter: blur(10px); /* Add blur effect */
-    border: 1px solid rgba(255, 255, 255, 0.1); /* Optional subtle border */
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); /* Optional subtle shadow */
+    background-color: rgba(45, 45, 45, 0.4);
+    border-radius: 25px; /* User removed this based on their diff */
+    margin-top: 15px; /* REMOVED: Not suitable for fixed positioning context */
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+
+    position: fixed;
+    bottom: 15px;
+    left: 15px;
+    right: 15px;
+    width: calc(100% - 30px);
+    z-index: 10;
+    box-sizing: border-box;
 }
 
 .input-wrapper {
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
+    background-color: rgba(60, 60, 60, 0.9); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
     padding: 8px 5px 8px 10px; /* Adjust padding T/R/B/L */
 }
@@ -408,13 +420,81 @@ body {
     box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25); /* Optional focus shadow */
 }
 
-/* Styles for the Tool Buttons Area (Placeholder) */
+#settings-panel #settings-item {
+    display: flex;
+    flex-direction: row;
+}
+
+/* ADDED: Styles for the Web Search checkbox container */
+#settings-panel .setting-item.web-search-setting {
+    display: flex;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    padding: 5px 10px; /* Keep consistent padding */
+    margin-top: 10px;
+    margin-bottom: 5px;
+}
+
+.web-search-setting {
+    display: flex;
+    align-items: center;
+    margin-top: 8px;
+}
+
+#settings-panel .web-search-setting label[for="web-search-toggle"] {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 1em;
+    flex-grow: 1; /* Allow label to take available space on the left */
+}
+
+#settings-panel input[type="checkbox"]#web-search-toggle {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    width: 18px; /* Custom size */
+    height: 18px;
+    background-color: rgba(0, 0, 0, 0.2); /* Darker background for the box */
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Slightly more visible border */
+    border-radius: 4px;
+    cursor: pointer;
+    position: relative;
+    outline: none;
+    margin-top: 5px;
+    vertical-align: middle; /* Align with label text */
+}
+
+#settings-panel input[type="checkbox"]#web-search-toggle:checked {
+    background-color: #474747; /* Accent color when checked */
+}
+
+/* Custom checkmark */
+#settings-panel input[type="checkbox"]#web-search-toggle:checked::before {
+    content: "✓"; /* Checkmark character */
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    color: white;
+    line-height: 1;
+}
+
+/* MODIFIED: Styles for Tool Buttons Area */
 #tool-buttons {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: center; /* Or space-around/etc. if preferred */
     gap: 8px;
-    margin-bottom: 8px;
+    padding: 4px 0; /* Add some vertical padding if desired */
+
+    position: fixed; /* ADDED */
+    left: 15px;      /* ADDED: Align with input-area */
+    right: 15px;     /* ADDED: Align with input-area */
+    width: calc(100% - 30px); /* ADDED: Align with input-area */
+    z-index: 10;     /* ADDED: Same stacking context as input-area */
+    box-sizing: border-box; /* ADDED */
 }
 
 /* Utility class to hide elements */
@@ -728,4 +808,141 @@ body.fade-out {
 
 #api-key-status-icon.visible {
     opacity: 1;
+}
+
+/* ADDED: Styles for Web Search Globe Icon and Status */
+.web-search-status-container {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Space between icon and text */
+    padding: 5px 0; /* Some vertical padding */
+    font-style: italic;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.web-search-globe-icon,
+.lucide-dollar-sign {
+    width: auto;
+    height: 20px;
+}
+
+
+.lucide-thermometer {
+    height: 30px;
+    width: auto;
+}
+
+.spinning-globe {
+    animation: spin 2s linear infinite;
+}
+
+.web-search-status-text {
+    font-size: 0.9em;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* ADDED: Styles for Financial Data Globe Icon and Status */
+.financial-data-status-container {
+  display: flex;
+  align-items: center;
+  gap: 8px; /* Space between icon and text */
+  padding: 5px 0; /* Some vertical padding */
+  font-style: italic;
+  color: var(--text-secondary-color); /* Or your preferred color */
+}
+
+.financial-data-status-text {
+  font-size: 0.9em;
+}
+
+.financial-data-source-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0; /* Adjust padding as needed */
+  margin-bottom: 8px; /* Space before the main LLM content */
+  font-size: 0.85em; /* Slightly smaller than main text */
+  color: var(--text-secondary-color); /* Or your preferred color */
+  border-bottom: 1px solid var(--border-color); /* Optional: a light separator */
+}
+
+/* ADDED: Styles for the persistent Web Search Source container */
+.web-search-source-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0; /* Similar to financial-data-source-container */
+  margin-bottom: 8px; /* Space before the main LLM content */
+  font-size: 0.85em; /* Slightly smaller than main text */
+  color: rgba(255, 255, 255, 0.7); /* Consistent with other secondary text */
+  /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */ /* Optional: a very light separator */
+}
+
+.web-search-accordion {
+  margin-bottom: 5px;
+  border: 1px solid rgba(0, 0, 0, 0);
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0);
+}
+
+.web-search-accordion summary {
+  padding: 0 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.7);
+  background-color: rgba(0, 0, 0, 0);
+}
+
+.web-search-accordion summary:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.web-search-content {
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.7);
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+.web-search-source-info {
+  font-style: italic;
+}
+
+.web-search-source-info a {
+  color: #007aff;
+  text-decoration: none;
+}
+
+.web-search-source-info a:hover {
+  text-decoration: underline;
+}
+
+.web-search-answer {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* Add custom triangle marker for web search accordion */
+.web-search-accordion summary {
+  list-style: none; /* Remove default marker */
+  position: relative;
+  padding-left: 4px;
+}
+
+/* Hide summary marker on Webkit */
+.web-search-accordion summary::-webkit-details-marker {
+  display: none;
 }

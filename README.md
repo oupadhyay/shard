@@ -15,10 +15,12 @@ A Tauri application for easy interaction with AI models.
 *   System Prompt
 *   Reasoning for R1
 *   LaTeX Delimiter Support
+*   Financial Data from Yahoo Finance
+*   Weather Data from Open-Meteo
+*   General Knowledge Search from Wikipedia
 
 ### In Progress Features
 
-*   Web Search (Idea 0.5.0 💡)
 *   YT Video Summarization (Idea 0.5.X 💡)
 *   Custom System Prompt (Idea 0.5.X 💡)
 

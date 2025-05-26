@@ -26,10 +26,11 @@ const settingsToggle = document.getElementById("settings-toggle") as HTMLButtonE
 const settingsPanel = document.getElementById("settings-panel") as HTMLDivElement;
 const clearChatButton = document.getElementById("clear-chat-button") as HTMLButtonElement;
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
+const webSearchToggle = document.getElementById("web-search-toggle") as HTMLInputElement;
 
 const FADE_DURATION_SETTINGS = 80; // Duration for settings panel fade
 // Define fixed window dimensions
-const FIXED_WINDOW_WIDTH = 350;
+const FIXED_WINDOW_WIDTH = 300;
 const appWindow = getCurrentWindow();
 
 // Create and add close button to settings panel
@@ -216,19 +217,86 @@ async function loadInitialSettings() {
       if (settingsStatus) settingsStatus.textContent = `Error loading model: ${error}`;
     }
   }
+
+  // Load and set Web Search preference
+  if (webSearchToggle) {
+    try {
+      const enabled = await invoke<boolean>("get_enable_web_search");
+      webSearchToggle.checked = enabled;
+      console.log("Web search preference loaded:", enabled);
+    } catch (error) {
+      console.error("Failed to load web search preference:", error);
+    }
+
+    webSearchToggle.addEventListener("change", async () => {
+      try {
+        await invoke("set_enable_web_search", { enable: webSearchToggle.checked });
+        console.log("Web search preference saved:", webSearchToggle.checked);
+        if (settingsStatus) settingsStatus.textContent = "Web search preference saved.";
+        // Show checkmark briefly
+        if (apiKeyStatusIcon) {
+          apiKeyStatusIcon.classList.add("visible");
+          setTimeout(() => {
+            apiKeyStatusIcon.classList.remove("visible");
+            if (settingsStatus && settingsStatus.textContent === "Web search preference saved.") {
+              settingsStatus.textContent = "";
+            }
+          }, 2000);
+        } else {
+          setTimeout(() => {
+            if (settingsStatus && settingsStatus.textContent === "Web search preference saved.") {
+              settingsStatus.textContent = "";
+            }
+          }, 2000);
+        }
+      } catch (error) {
+        console.error("Failed to save web search preference:", error);
+        if (settingsStatus) settingsStatus.textContent = "Error saving web search preference.";
+      }
+    });
+  }
 }
 
 // --- Helper to auto-resize textarea ---
-const initialTextareaHeight = "calc(2em * 1.4)"; // Store initial height
+const initialTextareaHeight = "calc(2em * 1.4)";
 function autoResizeTextarea() {
   if (!messageInput) return;
-  // Temporarily shrink height to get accurate scrollHeight
   messageInput.style.height = "auto";
-  // Set height based on content, but don't exceed a max
-  const newHeight = Math.min(messageInput.scrollHeight, 200); // Limit max height to 200px (adjust as needed)
+  const newHeight = Math.min(messageInput.scrollHeight, 200);
   messageInput.style.height = `${newHeight}px`;
-  // Show scrollbar if content exceeds max height
   messageInput.style.overflowY = newHeight >= 200 ? "auto" : "hidden";
+  updateInputAreaLayout(); // ADDED: Update layout after resize
+}
+
+// --- ADDED: Function to adjust layout based on input area height ---
+function updateInputAreaLayout() {
+  const inputArea = document.getElementById("input-area");
+  const chatHistoryEl = document.getElementById("chat-history");
+  const toolButtons = document.getElementById("tool-buttons"); // ADDED
+  const containerBottomPadding = 15; // The .container padding-bottom
+  const gapBetweenToolButtonsAndInput = 8; // Desired gap
+
+  if (inputArea && chatHistoryEl && toolButtons) { // ADDED toolButtons check
+    const inputAreaHeight = inputArea.offsetHeight;
+
+    // Position tool-buttons directly above input-area
+    toolButtons.style.bottom = `${containerBottomPadding + inputAreaHeight + gapBetweenToolButtonsAndInput}px`;
+    const toolButtonsHeight = toolButtons.offsetHeight;
+
+    // Calculate total height occupied by fixed elements at the bottom
+    const totalFixedBottomHeight = inputAreaHeight + toolButtonsHeight + gapBetweenToolButtonsAndInput;
+
+    const baseChatHistorySpacing = 15; // Base spacing above the topmost fixed element
+    chatHistoryEl.style.paddingBottom = `${totalFixedBottomHeight + baseChatHistorySpacing}px`;
+
+    chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+  } else if (inputArea && chatHistoryEl) {
+    // Fallback if tool-buttons element is not found (e.g. if it were optional)
+    const inputAreaHeight = inputArea.offsetHeight;
+    const baseSpacing = 15;
+    chatHistoryEl.style.paddingBottom = `${inputAreaHeight + baseSpacing}px`;
+    chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+  }
 }
 
 // --- Chat Functionality ---
@@ -357,22 +425,17 @@ function updateInputAreaForCapture() {
 async function clearChatHistory() {
   const bodyElement = document.body;
 
-  // Start fade out
   console.log("Starting fade out for chat clear...");
   bodyElement.classList.add("fade-out");
   bodyElement.classList.remove("fade-in");
 
-  // Wait for fade out to complete
   setTimeout(async () => {
-  // Clear chat content while faded out
     if (chatHistory) chatHistory.innerHTML = "";
     console.log("Chat history cleared.");
     chatMessageHistory = [];
 
-    // Hide clear button again
     if (clearChatButton) clearChatButton.classList.add("hidden");
 
-    // Clear capture state and cleanup temp file if necessary
     if (currentTempScreenshotPath) {
       console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
       invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath })
@@ -382,18 +445,17 @@ async function clearChatHistory() {
     currentOcrText = null;
     currentImageBase64 = null;
     currentTempScreenshotPath = null;
-    updateInputAreaForCapture(); // Clear preview and tooltip
+    updateInputAreaForCapture();
 
-    if (statusMessage) statusMessage.textContent = ""; // Clear status
+    if (statusMessage) statusMessage.textContent = "";
 
-    // Start fade in after everything is resized
+    // updateInputAreaLayout(); // Call AFTER fade-in completes for accurate measurement
+
     console.log("Starting fade in after chat clear...");
     bodyElement.classList.remove("fade-out");
-    bodyElement.classList.add("fade-in");
-
-    // Clean up fade-in class after animation completes
     setTimeout(() => {
       bodyElement.classList.remove("fade-in");
+      updateInputAreaLayout(); // ADDED: Update layout AFTER fade-in completes
     }, FADE_DURATION);
 
   }, FADE_DURATION);
@@ -468,8 +530,8 @@ async function handleCaptureOcr() {
       }, 5000);
     }
   } finally {
-    // Re-enable icon
-    if (ocrIconContainer) ocrIconContainer.style.opacity = "1";
+    updateInputAreaLayout(); // ADDED: Ensure layout is correct after input clear/reset
+    updateInputAreaForCapture();
   }
 }
 
@@ -601,13 +663,7 @@ async function handleSendMessage() {
       );
     }
   } finally {
-    // Re-enable input regardless of success/failure OF THE INVOKE CALL
-    // Actual message completion enables it in STREAM_END or STREAM_ERROR
-    // if (messageInput) { // MODIFIED: No longer disabling/enabling here for this purpose
-    //   messageInput.disabled = false;
-    //   // messageInput.focus();
-    // }
-    // Ensure preview/tooltip are cleared in case they weren't before
+    updateInputAreaLayout(); // ADDED: Ensure layout is correct after input clear/reset
     updateInputAreaForCapture();
   }
 }
@@ -629,14 +685,19 @@ interface StreamErrorPayload {
 let unlistenStreamChunk: (() => void) | null = null;
 let unlistenStreamEnd: (() => void) | null = null;
 let unlistenStreamError: (() => void) | null = null;
+let unlistenArticleLookupStarted: (() => void) | null = null;
+let unlistenArticleLookupCompleted: (() => void) | null = null;
+let unlistenWeatherLookupStarted: (() => void) | null = null;
+let unlistenWeatherLookupCompleted: (() => void) | null = null;
+let unlistenFinancialDataStarted: (() => void) | null = null;
+let unlistenFinancialDataCompleted: (() => void) | null = null;
 
 // Buffer and flag for batched animation of stream chunks
-let streamDeltaBuffer = ""; // ADDED: Accumulates deltas
-let streamAnimationFrameRequested = false; // ADDED: Tracks if an animation frame is pending
+let streamDeltaBuffer = "";
+let streamAnimationFrameRequested = false;
 
-// ADDED: Configuration for sub-chunking large pieces of text
-const MAX_SUB_CHUNK_LENGTH = 70; // Characters per animated sub-chunk
-const SUB_CHUNK_ANIMATION_DELAY = 50; // Milliseconds delay between animating sub-chunks
+const MAX_SUB_CHUNK_LENGTH = 70;
+const SUB_CHUNK_ANIMATION_DELAY = 50;
 
 // --- Helper function to create streaming dots ---
 function getStreamingDots(): HTMLSpanElement {
@@ -647,6 +708,115 @@ function getStreamingDots(): HTMLSpanElement {
     dotsContainer.appendChild(dot);
   }
   return dotsContainer;
+}
+
+// --- ADDED: Helper function to create Globe Icon ---
+function createGlobeIcon(): SVGSVGElement {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(svgNS, "svg");
+  icon.setAttribute("width", "18");
+  icon.setAttribute("height", "18");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  // Apply base classes for styling and Lucide identity. Spinning is now opt-in.
+  icon.classList.add("lucide", "lucide-globe", "web-search-globe-icon");
+
+  const circle1 = document.createElementNS(svgNS, "circle");
+  circle1.setAttribute("cx", "12");
+  circle1.setAttribute("cy", "12");
+  circle1.setAttribute("r", "10");
+  icon.appendChild(circle1);
+
+  const path1 = document.createElementNS(svgNS, "path");
+  path1.setAttribute("d", "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20");
+  icon.appendChild(path1);
+
+  const path2 = document.createElementNS(svgNS, "path");
+  path2.setAttribute("d", "M2 12h20");
+  icon.appendChild(path2);
+
+  return icon;
+}
+
+// --- Function to create icons ---
+
+function createThermometerIcon(): SVGSVGElement {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(svgNS, "svg");
+  icon.setAttribute("width", "18");
+  icon.setAttribute("height", "18");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.classList.add("lucide", "lucide-thermometer-icon", "lucide-thermometer");
+  const path = document.createElementNS(svgNS, "path");
+  path.setAttribute("d", "M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z");
+  icon.appendChild(path);
+  return icon;
+}
+
+function createFinancialIcon(): SVGSVGElement {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(svgNS, "svg");
+  icon.setAttribute("width", "18");
+  icon.setAttribute("height", "18");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.classList.add("lucide", "lucide-dollar-sign"); // Or appropriate Lucide class
+  const path1 = document.createElementNS(svgNS, "path");
+  path1.setAttribute("d", "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"); // Example path
+  icon.appendChild(path1);
+  return icon;
+}
+
+// --- Define interfaces for Article Lookup event payloads --- (Matches backend)
+interface ArticleLookupStartedPayload {
+  query: string;
+}
+interface ArticleLookupCompletedPayload {
+  query: string;
+  success: boolean;
+  summary?: string | null;
+  source_name?: string | null;
+  source_url?: string | null;
+  error?: string | null;
+}
+
+// --- ADDED: Define interfaces for Weather Lookup event payloads --- (Matches backend)
+interface WeatherLookupStartedPayload {
+  location: string;
+}
+interface WeatherLookupCompletedPayload {
+  location: string;
+  success: boolean;
+  temperature?: number | null;
+  unit?: string | null;
+  description?: string | null;
+  error?: string | null;
+}
+
+// Ensure these are present:
+interface FinancialDataStartedPayload {
+  query: string;
+  symbol: string;
+}
+interface FinancialDataCompletedPayload {
+  query: string;
+  symbol: string;
+  success: boolean;
+  data?: string | null;
+  error?: string | null;
 }
 
 async function setupStreamListeners() {
@@ -734,16 +904,261 @@ async function setupStreamListeners() {
     }
   });
 
+  if (unlistenArticleLookupStarted) unlistenArticleLookupStarted();
+  unlistenArticleLookupStarted = await listen<ArticleLookupStartedPayload>("ARTICLE_LOOKUP_STARTED", (event) => {
+    console.log("ARTICLE_LOOKUP_STARTED received:", event.payload);
+    if (currentAssistantContentDiv) {
+      // Remove any previous article lookup status ONLY
+      const existingStatus = currentAssistantContentDiv.querySelector(".article-lookup-status-container");
+      if (existingStatus) {
+        existingStatus.remove();
+      }
+      // Also remove general streaming dots if they are the only thing
+      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+      if (existingDots && currentAssistantContentDiv.children.length === 1 && currentAssistantContentDiv.firstChild === existingDots) {
+        existingDots.remove();
+      }
+
+      const lookupStatusDiv = document.createElement("div");
+      lookupStatusDiv.classList.add("article-lookup-status-container");
+
+      const globeIcon = createGlobeIcon();
+      globeIcon.classList.add("spinning-globe");
+      lookupStatusDiv.appendChild(globeIcon);
+
+      const statusText = document.createElement("span");
+      statusText.textContent = `Looking up article for: "${event.payload.query}"...`;
+      statusText.classList.add("article-lookup-status-text");
+      lookupStatusDiv.appendChild(statusText);
+
+      // Prepend the new status
+      currentAssistantContentDiv.insertBefore(lookupStatusDiv, currentAssistantContentDiv.firstChild);
+      if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+  });
+
+  if (unlistenArticleLookupCompleted) unlistenArticleLookupCompleted();
+  unlistenArticleLookupCompleted = await listen<ArticleLookupCompletedPayload>("ARTICLE_LOOKUP_COMPLETED", (event) => {
+    console.log("ARTICLE_LOOKUP_COMPLETED received:", event.payload);
+    if (currentAssistantContentDiv) {
+      const searchingStatusContainer = currentAssistantContentDiv.querySelector(".article-lookup-status-container");
+      if (searchingStatusContainer) {
+        searchingStatusContainer.remove();
+      }
+
+      if (event.payload.success && event.payload.summary) {
+        const details = document.createElement("details");
+        details.classList.add("web-search-accordion");
+
+        const summaryElement = document.createElement("summary");
+        const globeIcon = createGlobeIcon();
+        summaryElement.appendChild(globeIcon);
+        summaryElement.appendChild(document.createTextNode(` Wikipedia Results: "${event.payload.query}"`));
+        details.appendChild(summaryElement);
+
+        const searchContentDiv = document.createElement("div");
+        searchContentDiv.classList.add("web-search-content");
+
+        if (event.payload.source_name || event.payload.source_url) {
+          const sourceInfo = document.createElement("p");
+          sourceInfo.classList.add("web-search-source-info");
+          sourceInfo.appendChild(document.createTextNode("Source: "));
+
+          if (event.payload.source_name && event.payload.source_url) {
+            const sourceLink = document.createElement("a");
+            sourceLink.href = event.payload.source_url;
+            sourceLink.textContent = event.payload.source_name;
+            sourceLink.target = "_blank";
+            sourceLink.rel = "noopener noreferrer";
+            sourceInfo.appendChild(sourceLink);
+          } else if (event.payload.source_name) {
+            sourceInfo.appendChild(document.createTextNode(event.payload.source_name));
+          } else if (event.payload.source_url) {
+            const sourceLink = document.createElement("a");
+            sourceLink.href = event.payload.source_url;
+            sourceLink.textContent = event.payload.source_url;
+            sourceLink.target = "_blank";
+            sourceLink.rel = "noopener noreferrer";
+            sourceInfo.appendChild(sourceLink);
+          }
+          searchContentDiv.appendChild(sourceInfo);
+        }
+
+        if (event.payload.summary) {
+          const summaryPre = document.createElement("pre");
+          summaryPre.classList.add("web-search-answer");
+          summaryPre.textContent = event.payload.summary;
+          searchContentDiv.appendChild(summaryPre);
+        }
+
+        details.appendChild(searchContentDiv);
+        currentAssistantContentDiv.insertBefore(details, currentAssistantContentDiv.firstChild);
+      } else if (event.payload.error) {
+        console.error("Article lookup failed:", event.payload.error);
+      }
+
+      if (currentAssistantContentDiv.innerHTML === "" ||
+        (event.payload.success && currentAssistantContentDiv.children.length === 1 && currentAssistantContentDiv.querySelector(".web-search-accordion"))) {
+        currentAssistantContentDiv.appendChild(getStreamingDots());
+      }
+      if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+  });
+
+  if (unlistenFinancialDataStarted) unlistenFinancialDataStarted();
+  unlistenFinancialDataStarted = await listen<FinancialDataStartedPayload>(
+    "FINANCIAL_DATA_STARTED",
+    (event) => {
+      console.log("FINANCIAL_DATA_STARTED received:", event.payload);
+      if (currentAssistantContentDiv) {
+        // Remove any previous financial data status ONLY
+        const existingStatus = currentAssistantContentDiv.querySelector(".financial-data-status-container");
+        if (existingStatus) {
+          existingStatus.remove();
+        }
+        // Also remove general streaming dots if they are the only thing
+        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+        if (existingDots && currentAssistantContentDiv.children.length === 1 && currentAssistantContentDiv.firstChild === existingDots) {
+          existingDots.remove();
+        }
+
+        const statusDiv = document.createElement("div");
+        statusDiv.classList.add("financial-data-status-container");
+
+        const globeIcon = createFinancialIcon(); // Using globe, update if you have a specific financial icon
+        globeIcon.classList.add("spinning-globe");
+        statusDiv.appendChild(globeIcon);
+
+        const statusText = document.createElement("span");
+        statusText.textContent = `Fetching financial data for: "${event.payload.symbol}"...`;
+        statusText.classList.add("financial-data-status-text");
+        statusDiv.appendChild(statusText);
+
+        // Prepend the new status
+        currentAssistantContentDiv.insertBefore(statusDiv, currentAssistantContentDiv.firstChild);
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+    },
+  );
+
+  if (unlistenFinancialDataCompleted) unlistenFinancialDataCompleted();
+  unlistenFinancialDataCompleted = await listen<FinancialDataCompletedPayload>(
+    "FINANCIAL_DATA_COMPLETED",
+    (event) => {
+      console.log("FINANCIAL_DATA_COMPLETED received:", event.payload);
+      if (currentAssistantContentDiv) {
+        const fetchingStatusContainer = currentAssistantContentDiv.querySelector(
+          ".financial-data-status-container",
+        );
+        if (fetchingStatusContainer) {
+          fetchingStatusContainer.remove();
+        }
+
+        const details = document.createElement("details");
+        details.classList.add("web-search-accordion");
+
+        const summaryElement = document.createElement("summary");
+        const financialIcon = createFinancialIcon();
+        summaryElement.appendChild(financialIcon);
+        summaryElement.appendChild(document.createTextNode(` Financial Data for: "${event.payload.symbol}"`));
+        details.appendChild(summaryElement);
+
+        const financialContentDiv = document.createElement("div");
+        financialContentDiv.classList.add("web-search-content");
+
+        if (event.payload.success && event.payload.symbol && event.payload.data) {
+          // Success with data
+          const dataPre = document.createElement("pre");
+          dataPre.classList.add("financial-data-text");
+          dataPre.style.whiteSpace = "pre-wrap";
+          dataPre.textContent = event.payload.data;
+          financialContentDiv.appendChild(dataPre);
+        } else {
+          // Error or No Data case
+          const errorParagraph = document.createElement("p");
+          errorParagraph.classList.add("financial-lookup-error-text"); // For styling if needed
+
+          if (event.payload.error) {
+            console.error("Financial data lookup error:", event.payload.error);
+            errorParagraph.textContent = `Financial data lookup for "${event.payload.symbol}" failed: ${event.payload.error}.`;
+          } else if (event.payload.success && !event.payload.data && event.payload.symbol) {
+            // Success, but no specific financial data
+            errorParagraph.textContent = `No specific financial data found for "${event.payload.symbol}".`;
+          } else {
+            // General fallback
+            errorParagraph.textContent = `An unexpected issue occurred while fetching financial data for "${event.payload.symbol}".`;
+          }
+          financialContentDiv.appendChild(errorParagraph);
+
+          const tipParagraph = document.createElement("p");
+          tipParagraph.classList.add("financial-lookup-tip"); // For styling if needed
+          tipParagraph.textContent = "If the stock isn't found, try the name capitalized or the symbol in all caps!";
+          financialContentDiv.appendChild(tipParagraph);
+
+          // Optionally open the accordion if there's an error/tip
+          details.open = true;
+        }
+
+        details.appendChild(financialContentDiv);
+        currentAssistantContentDiv.insertBefore(details, currentAssistantContentDiv.firstChild);
+
+        // Ensure streaming dots are present if no other content is being streamed by the LLM yet
+        if (!currentAssistantContentDiv.querySelector(".streaming-dots") &&
+          (currentAssistantContentDiv.innerHTML === "" || // Empty
+            (currentAssistantContentDiv.children.length > 0 && // Only has accordions/tool messages
+              currentAssistantContentDiv.querySelectorAll(":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)").length === 0)
+          )
+        ) {
+          currentAssistantContentDiv.appendChild(getStreamingDots());
+        }
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+    },
+  );
+
   if (unlistenStreamEnd) unlistenStreamEnd();
   unlistenStreamEnd = await listen<StreamEndPayload>("STREAM_END", async (event) => {
     console.log("STREAM_END received:", event.payload);
     if (currentAssistantMessageDiv && currentAssistantContentDiv) {
-      // Remove streaming dots before setting final content
       const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
       if (existingDots) {
         existingDots.remove();
       }
-      currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content)); // Final render with preprocessing
+
+      // Guard the DOM operations specifically
+      if (currentAssistantContentDiv) {
+        const accordions: { html: string, type: string, originalElement: HTMLElement }[] = [];
+        currentAssistantContentDiv.querySelectorAll(".web-search-accordion").forEach(accordionNode => {
+          const accordionElement = accordionNode as HTMLElement;
+          let type = "article";
+          if (accordionElement.querySelector(".weather-info-text")) type = "weather";
+          else if (accordionElement.querySelector(".financial-data-text")) type = "financial";
+          accordions.push({ html: accordionElement.outerHTML, type: type, originalElement: accordionElement });
+          accordionElement.remove();
+        });
+
+        // Ensure currentAssistantContentDiv is still valid before writing to innerHTML
+        if (currentAssistantContentDiv) {
+          try {
+            currentAssistantContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content));
+          } catch (e) {
+            console.error("Error rendering markdown for main content:", e);
+            currentAssistantContentDiv.textContent = event.payload.full_content;
+          }
+        }
+
+        // And again before inserting HTML
+        if (currentAssistantContentDiv) {
+          const order = ["article", "weather", "financial"];
+          order.forEach(type => {
+            const accordionToPrepend = accordions.find(a => a.type === type);
+            if (accordionToPrepend && currentAssistantContentDiv) {
+              currentAssistantContentDiv.insertAdjacentHTML('afterbegin', accordionToPrepend.html);
+            }
+          });
+        }
+      }
+
       currentAssistantMessageDiv.classList.remove("streaming");
 
       // Add reasoning if present
@@ -814,12 +1229,152 @@ async function setupStreamListeners() {
     currentAssistantContentDiv = null;
     isAIResponding = false; // Reset flag on stream error
   });
+
+  // --- WEATHER LOOKUP LISTENERS ---
+  if (unlistenWeatherLookupStarted) unlistenWeatherLookupStarted();
+  unlistenWeatherLookupStarted = await listen<WeatherLookupStartedPayload>("WEATHER_LOOKUP_STARTED", (event) => {
+    console.log("WEATHER_LOOKUP_STARTED received:", event.payload);
+    if (currentAssistantContentDiv) {
+      const existingStatus = currentAssistantContentDiv.querySelector(".weather-lookup-status-container");
+      if (existingStatus) existingStatus.remove();
+
+      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+      if (existingDots && currentAssistantContentDiv.children.length === 1 && currentAssistantContentDiv.firstChild === existingDots) {
+        existingDots.remove();
+      }
+
+      const lookupStatusDiv = document.createElement("div");
+      lookupStatusDiv.classList.add("weather-lookup-status-container");
+
+      const weatherIcon = createThermometerIcon();
+      weatherIcon.classList.add("spinning-icon"); // Apply the generic spinning class
+      lookupStatusDiv.appendChild(weatherIcon);
+
+      const statusText = document.createElement("span");
+      statusText.textContent = `Fetching weather for: "${event.payload.location}"...`;
+      statusText.classList.add("weather-lookup-status-text");
+      lookupStatusDiv.appendChild(statusText);
+
+      currentAssistantContentDiv.insertBefore(lookupStatusDiv, currentAssistantContentDiv.firstChild);
+      if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+  });
+
+  if (unlistenWeatherLookupCompleted) unlistenWeatherLookupCompleted();
+  unlistenWeatherLookupCompleted = await listen<WeatherLookupCompletedPayload>("WEATHER_LOOKUP_COMPLETED", (event) => {
+    console.log("WEATHER_LOOKUP_COMPLETED received:", event.payload);
+    if (currentAssistantContentDiv) {
+      const statusContainer = currentAssistantContentDiv.querySelector(".weather-lookup-status-container");
+      if (statusContainer) statusContainer.remove();
+
+      const details = document.createElement("details");
+      details.classList.add("web-search-accordion");
+
+      const summaryElement = document.createElement("summary");
+      const weatherIcon = createThermometerIcon(); // Static icon for summary
+      summaryElement.appendChild(weatherIcon);
+      summaryElement.appendChild(document.createTextNode(` Weather Information for: "${event.payload.location}"`));
+      details.appendChild(summaryElement);
+
+      const weatherContentDiv = document.createElement("div");
+      weatherContentDiv.classList.add("web-search-content");
+
+      if (event.payload.success && event.payload.temperature !== null && event.payload.temperature !== undefined && event.payload.location) {
+        // Success with data
+        const weatherText = document.createElement("p");
+        weatherText.classList.add("weather-info-text");
+        let displayText = `Temperature: ${event.payload.temperature.toFixed(1)}°${event.payload.unit || 'C'}`;
+        if (event.payload.description) {
+          displayText += `\nDescription: ${event.payload.description}`;
+        }
+        weatherText.style.whiteSpace = "pre-wrap";
+        weatherText.textContent = displayText;
+        weatherContentDiv.appendChild(weatherText);
+      } else {
+        // Error or No Data case
+        const errorParagraph = document.createElement("p");
+        errorParagraph.classList.add("weather-lookup-error-text"); // For styling if needed
+
+        if (event.payload.error) {
+          console.error("Weather lookup failed:", event.payload.error);
+          errorParagraph.textContent = `Weather lookup for "${event.payload.location}" failed: ${event.payload.error}`;
+        } else if (event.payload.success && (event.payload.temperature === null || event.payload.temperature === undefined) && event.payload.location) {
+          // Success, but no specific temperature data
+          errorParagraph.textContent = `Could not retrieve weather data for "${event.payload.location}".`;
+        } else {
+          // General fallback, should ideally not be reached if payload structure is consistent
+          errorParagraph.textContent = `An unexpected issue occurred while fetching weather for "${event.payload.location}".`;
+        }
+        weatherContentDiv.appendChild(errorParagraph);
+
+        const tipParagraph = document.createElement("p");
+        tipParagraph.classList.add("weather-lookup-tip"); // For styling if needed
+        tipParagraph.textContent = "If the place isn't found, try your zip code!";
+        weatherContentDiv.appendChild(tipParagraph);
+
+        // Optionally open the accordion if there's an error/tip
+        details.open = true;
+      }
+
+      details.appendChild(weatherContentDiv);
+      currentAssistantContentDiv.insertBefore(details, currentAssistantContentDiv.firstChild);
+
+      // Ensure streaming dots are present if no other content is being streamed by the LLM yet
+      if (!currentAssistantContentDiv.querySelector(".streaming-dots") &&
+        (currentAssistantContentDiv.innerHTML === "" || // Empty
+          (currentAssistantContentDiv.children.length > 0 && // Only has accordions/tool messages
+            currentAssistantContentDiv.querySelectorAll(":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)").length === 0)
+        )
+      ) {
+        currentAssistantContentDiv.appendChild(getStreamingDots());
+      }
+      if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+  });
+  // --- END WEATHER LOOKUP LISTENERS ---
+}
+
+// --- Function to add CSS styles for tool status containers ---
+function addToolStatusStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .spinning-icon {
+      animation: spin 2s linear infinite;
+    }
+
+    .article-lookup-status-container,
+    .weather-lookup-status-container,
+    .financial-data-status-container {
+      background-color: transparent;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      padding-left: 4px;
+      gap: 8px;
+      color: var(--text-color, #e0e0e0);
+    }
+
+    .article-lookup-status-text,
+    .weather-lookup-status-text,
+    .financial-data-status-text {
+      font-size: 0.9em;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
   loadInitialSettings();
   setupStreamListeners(); // ADDED: Setup listeners on DOM load
+  addToolStatusStyles(); // ADDED: Call the function to inject styles
   await setInitialWindowGeometry(); // Set fixed window size and position
+  updateInputAreaLayout(); // ADDED: Initial layout setup
 
   // --- Click-Through Logic ---
   // Ensure the window is interactive when it gains focus
@@ -930,7 +1485,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           if (apiKeyStatusIcon) apiKeyStatusIcon.classList.remove("visible");
           if (settingsStatus) settingsStatus.textContent = "Error saving API key.";
         }
-      }, 500); // Wait 500ms after last keystroke before saving
+      }, 500);
     });
   }
 
@@ -1032,6 +1587,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (ocrIconContainer) {
     ocrIconContainer.addEventListener("click", handleCaptureOcr);
   }
+
+  // ADDED: Listen for window resize to update layout
+  window.addEventListener("resize", updateInputAreaLayout);
 });
 
 // --- Event Listener for Window Toggle ---
@@ -1107,4 +1665,5 @@ listen("toggle-main-window", async () => {
 });
 
 console.log("Frontend listener for toggle-main-window set up.");
+
 

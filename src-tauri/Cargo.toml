@@ -1,6 +1,6 @@
 [package]
 name = "Shard"
-version = "0.5.0"
+version = "0.5.1"
 description = "An AI Research Companion Built on Rust & Tauri"
 authors = ["oupadhyay"]
 license = "MIT"

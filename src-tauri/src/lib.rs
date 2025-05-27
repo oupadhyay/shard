@@ -215,9 +215,28 @@ struct ArticleLookupCompletedPayload {
     query: String,
     success: bool,
     summary: Option<String>,
-    source_name: Option<String>,
-    source_url: Option<String>,
+    source_name: Option<Vec<String>>,
+    source_url: Option<Vec<String>>,
     error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IterativeSearchResult {
+    pub title: String,
+    pub summary: String,
+    pub url: String,
+    pub path_taken: Vec<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "decision_type")]
+enum AnalysisLLMDecision {
+    #[serde(rename = "FOUND_ANSWER")]
+    FoundAnswer { summary: String, title: String },
+    #[serde(rename = "NEXT_TERM")]
+    NextTerm { term: String, reason: String },
+    #[serde(rename = "STOP")]
+    Stop { reason: String },
 }
 
 // --- ADDED: Weather Lookup Event Payloads ---
@@ -373,8 +392,8 @@ async fn perform_wikipedia_lookup(
                                             title
                                         );
                                         return Ok(Some((
+                                            title,
                                             extract.trim().to_string(),
-                                            "Wikipedia".to_string(),
                                             source_url,
                                         )));
                                     }
@@ -1005,7 +1024,7 @@ async fn send_text_to_model(
                         "3. Specific financial market data for a publicly traded stock or symbol. If so, respond with only the exact string \"FINANCIAL_DATA\".\n" +
                         "   Examples: \"What is the stock price of GOOGL?\", \"AAPL stock quote\"\n" +
                         "4. No external data lookup, meaning the query is conversational, a command, a creative request, or can be answered from general LLM knowledge. If so, respond with only the exact string \"NO_LOOKUP\".\n" +
-                        "   Examples: \"Tell me a joke.\", \"Summarize this text for me: ...\", \"What is the capital of Germany (if already known by LLM)?\"\n" +
+                        "   Examples: \"Tell me a joke.\", \"Summarize this text for me: ...\", \"What is the capital of Germany?\"\n" +
                         &format!("User query: '{}'\n", user_query) +
                         "Based on this query, respond with one of the exact strings: \"WIKIPEDIA_LOOKUP\", \"WEATHER_LOOKUP\", \"FINANCIAL_DATA\", or \"NO_LOOKUP\".";
 
@@ -1031,7 +1050,7 @@ async fn send_text_to_model(
                             &client,
                             decider_messages,
                             &decider_gemini_api_key_string,
-                            decider_model_name,
+                            decider_model_name.clone(),
                         )
                         .await
                         {
@@ -1068,86 +1087,93 @@ async fn send_text_to_model(
 
                     // Replace if decision == "WEB_SEARCH" logic with new cases
                     if decision == "WIKIPEDIA_LOOKUP" {
-                        let mut effective_search_term = user_query.to_string();
-                        match extract_wikipedia_search_term(
-                            &client,
-                            user_query,
-                            decider_gemini_api_key_string.clone(),
-                            "gemini-2.0-flash".to_string(),
-                        )
-                        .await
-                        {
-                            Ok(extracted_term) => {
-                                effective_search_term = extracted_term;
-                            }
-                            Err(_) => { /* Error already logged in extractor, use_query remains default */
-                            }
-                        }
                         log::info!(
-                            "Wikipedia lookup DECIDED for query: '{}', effective search term: '{}'",
-                            user_query,
-                            effective_search_term
+                            "Iterative Wikipedia lookup DECIDED for query: '{}'",
+                            user_query
                         );
+                        let max_iterations = 4; // Max iterations for the research
 
                         if let Err(e) = window.emit(
                             "ARTICLE_LOOKUP_STARTED",
                             ArticleLookupStartedPayload {
-                                query: effective_search_term.clone(),
+                                query: user_query.to_string(), // Use the original user query for the event
                             },
                         ) {
                             log::warn!("Failed to emit ARTICLE_LOOKUP_STARTED event: {}", e);
                         }
-                        match perform_wikipedia_lookup(&client, &effective_search_term).await {
-                            Ok(Some((summary, source_name, source_url))) => {
-                                log::info!(
-                                    "Wikipedia lookup successful for term: '{}'. Summary found.",
-                                    effective_search_term
-                                );
-                                if let Err(e) = window.emit(
-                                    "ARTICLE_LOOKUP_COMPLETED",
-                                    ArticleLookupCompletedPayload {
-                                        query: effective_search_term.clone(), // Use effective term in event
-                                        success: true,
-                                        summary: Some(summary.clone()),
-                                        source_name: Some(source_name.clone()),
-                                        source_url: Some(source_url.clone()),
-                                        error: None,
-                                    },
-                                ) {
-                                    log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (success) event: {}", e);
-                                }
-                                article_lookup_result_text = Some(format!(
-                                    "Context from Wikipedia for '{}' (based on user query '{}'):\n{}\n\nSource: '{}' ({})",
-                                    effective_search_term, user_query, summary, source_name, source_url
-                                ));
-                                article_lookup_performed_successfully = true;
-                            }
-                            Ok(None) => {
-                                log::info!("Wikipedia lookup for term '{}' completed, but no summary found.", effective_search_term);
-                                if let Err(e) = window.emit(
-                                    "ARTICLE_LOOKUP_COMPLETED",
-                                    ArticleLookupCompletedPayload {
-                                        query: effective_search_term.clone(),
-                                        success: true,
-                                        summary: None,
-                                        source_name: None,
-                                        source_url: None,
-                                        error: None,
-                                    },
-                                ) {
-                                    log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (no summary) event: {}", e);
+
+                        match perform_iterative_wikipedia_research(
+                            &client,
+                            user_query,
+                            &decider_gemini_api_key_string, // API key
+                            &decider_model_name,            // Model for internal calls
+                            max_iterations,
+                        )
+                        .await
+                        {
+                            Ok(results) => {
+                                if results.is_empty() {
+                                    log::info!("Iterative Wikipedia lookup for query '{}' completed, but no specific information found.", user_query);
+                                    if let Err(e) = window.emit(
+                                                               "ARTICLE_LOOKUP_COMPLETED",
+                                                               ArticleLookupCompletedPayload {
+                                                                   query: user_query.to_string(),
+                                                                   success: true, // Process completed
+                                                                   summary: Some("No specific information found after iterative search.".to_string()),
+                                                                   source_name: None,
+                                                                   source_url: None,
+                                                                   error: None,
+                                                               },
+                                                           ) {
+                                                               log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (no results) event: {}", e);
+                                                           }
+                                } else {
+                                    log::info!("Iterative Wikipedia lookup successful for query: '{}'. Found {} results.", user_query, results.len());
+                                    let mut combined_summary = String::new();
+                                    let mut combined_source_names = Vec::<String>::new();
+                                    let mut combined_source_urls = Vec::<String>::new();
+
+                                    for (i, res) in results.iter().enumerate() {
+                                        combined_summary.push_str(&format!(
+                                            "Title: {}\nSummary: {}\n\n",
+                                            res.title, res.summary,
+                                        ));
+                                        combined_source_names.push(res.title.clone());
+                                        combined_source_urls.push(res.url.clone());
+                                    }
+
+                                    article_lookup_result_text = Some(format!(
+                                                               "Context from Iterative Wikipedia Search for user query '{}':\n\n{}",
+                                                               user_query,
+                                                               combined_summary.trim_end()
+                                                           ));
+                                    article_lookup_performed_successfully = true;
+
+                                    if let Err(e) = window.emit(
+                                        "ARTICLE_LOOKUP_COMPLETED",
+                                        ArticleLookupCompletedPayload {
+                                            query: user_query.to_string(),
+                                            success: true,
+                                            summary: Some(combined_summary),
+                                            source_name: Some(combined_source_names),
+                                            source_url: Some(combined_source_urls),
+                                            error: None,
+                                        },
+                                    ) {
+                                        log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (success) event: {}", e);
+                                    }
                                 }
                             }
                             Err(e) => {
                                 log::error!(
-                                    "Wikipedia lookup failed for term '{}'. Error: {}",
-                                    effective_search_term,
+                                    "Iterative Wikipedia lookup failed for query '{}'. Error: {}",
+                                    user_query,
                                     e
                                 );
                                 if let Err(emit_err) = window.emit(
                                     "ARTICLE_LOOKUP_COMPLETED",
                                     ArticleLookupCompletedPayload {
-                                        query: effective_search_term.clone(),
+                                        query: user_query.to_string(),
                                         success: false,
                                         summary: None,
                                         source_name: None,
@@ -2124,18 +2150,32 @@ async fn extract_wikipedia_search_term(
     user_query: &str,
     gemini_api_key_string: String,
     model_name: String,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     let extractor_prompt = format!(
-        "You are an expert at identifying the core subject or named entity in a user's query that is most suitable for a Wikipedia search.\n
-        Given the user query, extract the most concise and accurate search term for Wikipedia. Focus on the main topic, person, place, or concept.\n
-        For example:\n
-        - User Query: \"Tell me more about the history of the Eiffel Tower in Paris.\" -> Search Term: \"Eiffel Tower\"\n
-        - User Query: \"Who was the first president of the United States?\" -> Search Term: \"First President of the United States\" (or \"George Washington\" if context implies)\n
-        - User Query: \"What are the symptoms of influenza?\" -> Search Term: \"Influenza\"\n
-        - User Query: \"Explain quantum entanglement for me.\" -> Search Term: \"Quantum entanglement\"\n
-        Do not include conversational phrases like 'tell me about', 'what is', 'who was'. Output only the search term itself.\n\n
-        User Query: '{}'\n
-        Search Term:",
+        "You are an expert at identifying core subjects or named entities in a user's query that are suitable for Wikipedia searches.\n\
+        Given the user query, extract a list of concise and accurate search terms for Wikipedia.\n\
+        If the query is simple, provide a single search term in the list.\n\
+        If the query is complex or multifaceted, break it down into multiple relevant search terms.\n\
+        Focus on the main topics, persons, places, or concepts.\n\
+        Do not include conversational phrases like 'tell me about', 'what is', 'who was'.\n\
+        Output the search terms as a JSON array of strings. For example: [\"Term 1\", \"Term 2\"]. If only one term, output as [\"Term\"].\n\n\
+        Examples:\n\
+        - User Query: \"Tell me more about the history of the Eiffel Tower in Paris.\"\n\
+          Search Terms (JSON): [\"Eiffel Tower\"]\n\
+        - User Query: \"Who was the first president of the United States?\"\n\
+          Search Terms (JSON): [\"George Washington\"]\n\
+        - User Query: \"What are the symptoms of influenza?\"\n\
+          Search Terms (JSON): [\"Influenza\"]\n\
+        - User Query: \"Explain quantum entanglement for me.\"\n\
+          Search Terms (JSON): [\"Quantum entanglement\"]\n\
+        - User Query: \"Compare the economies of Germany and France.\"\n\
+          Search Terms (JSON): [\"Economy of Germany\", \"Economy of France\"]\n\
+        - User Query: \"Compare Federer and Nadal.\"\n\
+          Search Terms (JSON): [\"Roger Federer\", \"Rafael Nadal\"]\n\
+        - User Query: \"Impact of Renaissance art on Baroque architecture.\"\n\
+          Search Terms (JSON): [\"Renaissance art\", \"Baroque architecture\"]\n\
+        User Query: '{}'\n\
+        Search Terms (JSON):",
         user_query
     );
 
@@ -2149,7 +2189,6 @@ async fn extract_wikipedia_search_term(
         user_query
     );
 
-    // Using the existing non-streaming Gemini call function
     match call_gemini_api_non_streaming(
         client,
         extractor_messages,
@@ -2158,25 +2197,330 @@ async fn extract_wikipedia_search_term(
     )
     .await
     {
-        Ok(extracted_term_raw) => {
-            let extracted_term = extracted_term_raw.trim().trim_matches('"').to_string(); // Remove quotes and trim
-            log::info!(
-                "Extracted Wikipedia search term: '{}' for original query: '{}'",
-                extracted_term,
-                user_query
+        Ok(response_str) => match serde_json::from_str::<Vec<String>>(&response_str) {
+            Ok(terms) => {
+                if terms.is_empty() {
+                    log::warn!("Wikipedia search term extractor returned an empty list for query: '{}'. Falling back to original query.", user_query);
+                    Ok(vec![user_query.to_string()])
+                } else {
+                    log::info!(
+                        "Extracted Wikipedia search terms: {:?} for original query: '{}'",
+                        terms,
+                        user_query
+                    );
+                    Ok(terms)
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to parse Wikipedia search terms from LLM response for query '{}'. Error: {}. Response: \"{}\". Falling back to original query.", user_query, e, response_str);
+                Ok(vec![user_query.to_string()])
+            }
+        },
+        Err(e) => {
+            log::error!("Error calling Wikipedia search term extractor for query '{}': {}. Falling back to original query.", user_query, e);
+            Ok(vec![user_query.to_string()])
+        }
+    }
+}
+
+async fn analyze_wikipedia_page_for_iteration(
+    client: &reqwest::Client,
+    original_user_query: &str,
+    searched_term: &str,
+    page_title: &str,
+    page_content: &str,
+    visited_page_titles: &[String],
+    gemini_api_key: &str,
+    model_name: &str,
+) -> Result<AnalysisLLMDecision, String> {
+    const MAX_CONTENT_CHARS: usize = 150000;
+    let truncated_content = if page_content.chars().count() > MAX_CONTENT_CHARS {
+        page_content
+            .chars()
+            .take(MAX_CONTENT_CHARS)
+            .collect::<String>()
+            + "\n[Content truncated]"
+    } else {
+        page_content.to_string()
+    };
+
+    let visited_titles_str = visited_page_titles.join(", ");
+
+    let prompt = format!(
+        "You are an AI assistant helping a user research a topic using Wikipedia. Your goal is to navigate Wikipedia pages iteratively to find the answer or relevant information for the user's original query.\n\n\
+        Original User Query: \"{}\"\n\n\
+        You have just read the Wikipedia page titled: \"{}\" (found by searching for \"{}\").\n\
+        Here is the (potentially truncated) content of this page:\n---\n{}\n---\n\n\
+        You have already visited or processed the following Wikipedia page titles in this research chain: [{}]. Do not suggest revisiting these.\n\n\
+        Based on the original user query and the content of the current page, decide the next step:\n\
+        1. If the current page's content directly and substantially answers the user's original query, or provides key information directly relevant to it: \
+           Respond with a JSON object: {{\"decision_type\": \"FOUND_ANSWER\", \"summary\": \"<brief summary of the answer/info found on this page>\", \"title\": \"<current page title>\"}}\n\
+        2. If the current page provides clues or mentions a more specific entity (person, place, event, concept, document, case name, etc.) that seems like a promising next step for a Wikipedia search to get closer to answering the original query: \
+           Respond with a JSON object: {{\"decision_type\": \"NEXT_TERM\", \"term\": \"<concise Wikipedia search term for the next step>\", \"reason\": \"<briefly explain why this term is a good next step>\"}}. The term should be a precise Wikipedia article title if possible. Ensure the term is not in the list of already visited pages.\n\
+        3. If the current page is not relevant, or doesn't offer a clear next step towards answering the query, or if you think the research path is a dead end: \
+           Respond with a JSON object: {{\"decision_type\": \"STOP\", \"reason\": \"<briefly explain why you are stopping this path>\"}}\n\n\
+        Focus on finding the most direct path to the answer. Be specific with \"NEXT_TERM\" suggestions. Ensure the JSON is valid.",
+        original_user_query, page_title, searched_term, truncated_content, visited_titles_str
+    );
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    }];
+
+    log::info!(
+        "Requesting Wikipedia content analysis for page: '{}', original query: '{}'",
+        page_title,
+        original_user_query
+    );
+
+    match call_gemini_api_non_streaming(client, messages, gemini_api_key, model_name.to_string())
+        .await
+    {
+        Ok(response_str) => {
+            log::debug!(
+                "Raw analysis response for page '{}': {}",
+                page_title,
+                response_str
             );
-            if extracted_term.is_empty() {
-                log::warn!("Wikipedia search term extractor returned empty. Falling back to original query.");
-                Ok(user_query.to_string()) // Fallback to original query if extraction is empty
-            } else {
-                Ok(extracted_term)
+            let cleaned_response = response_str
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            match serde_json::from_str::<AnalysisLLMDecision>(cleaned_response) {
+                Ok(decision) => Ok(decision),
+                Err(e) => {
+                    log::error!("Failed to parse analysis LLM response for page '{}'. Error: {}. Response: '{}', Cleaned: '{}'", page_title, e, response_str, cleaned_response);
+                    Err(format!(
+                        "Failed to parse analysis response: {}. Raw: {}",
+                        e, response_str
+                    ))
+                }
             }
         }
         Err(e) => {
-            log::error!("Error calling Wikipedia search term extractor for query '{}': {}. Falling back to original query.", user_query, e);
-            Ok(user_query.to_string()) // Fallback to original query on error
+            log::error!(
+                "Error calling analysis LLM for page '{}': {}",
+                page_title,
+                e
+            );
+            Err(format!("LLM call failed for analysis: {}", e))
         }
     }
+}
+
+pub async fn perform_iterative_wikipedia_research(
+    client: &reqwest::Client,
+    initial_user_query: &str,
+    gemini_api_key: &str,
+    model_name: &str,
+    max_iterations: usize,
+) -> Result<Vec<IterativeSearchResult>, String> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut all_found_info: Vec<IterativeSearchResult> = Vec::new();
+    let mut visited_page_titles: HashSet<String> = HashSet::new();
+    let mut search_queue: VecDeque<(String, Vec<String>)> = VecDeque::new();
+
+    log::info!(
+        "Starting iterative Wikipedia research for query: '{}'",
+        initial_user_query
+    );
+
+    let initial_terms = match extract_wikipedia_search_term(
+        client,
+        initial_user_query,
+        gemini_api_key.to_string(),
+        model_name.to_string(),
+    )
+    .await
+    {
+        Ok(terms) => terms,
+        Err(e) => {
+            log::error!(
+                "Failed initial term extraction for query '{}': {}",
+                initial_user_query,
+                e
+            );
+            // Fallback to using the original query if extraction fails
+            vec![initial_user_query.to_string()]
+        }
+    };
+
+    for term in initial_terms {
+        if !term.trim().is_empty() {
+            search_queue.push_back((term.clone(), vec![term]));
+        }
+    }
+
+    if search_queue.is_empty() && !initial_user_query.trim().is_empty() {
+        log::warn!("Initial term extraction yielded empty results for query: '{}'. Falling back to original query.", initial_user_query);
+        search_queue.push_back((
+            initial_user_query.to_string(),
+            vec![initial_user_query.to_string()],
+        ));
+    }
+
+    let mut current_iteration = 0;
+
+    while let Some((current_term, current_path)) = search_queue.pop_front() {
+        if current_iteration >= max_iterations {
+            log::warn!(
+                "Max iterations ({}) reached for query: {}",
+                max_iterations,
+                initial_user_query
+            );
+            break;
+        }
+        // Check based on the term we intend to search. Actual page titles are checked after lookup.
+        if visited_page_titles.contains(&current_term) && current_path.len() > 1 {
+            // Allow initial terms to be re-processed if they lead to different actual titles
+            log::debug!(
+                "Skipping already processed search term in path: {}",
+                current_term
+            );
+            continue;
+        }
+
+        current_iteration += 1;
+        log::info!(
+            "Iterative search (iter {}/{}, path depth {}): Looking up '{}'. Path: {:?}",
+            current_iteration,
+            max_iterations,
+            current_path.len(),
+            current_term,
+            current_path
+        );
+
+        match perform_wikipedia_lookup(client, &current_term).await {
+            Ok(pages) => {
+                let mut page_content_opt: Option<String> = None;
+                let mut actual_page_title_opt: Option<String> = None;
+                let mut page_url_opt: Option<String> = None;
+
+                // The Wikipedia lookup returns a Vec of tuples (title, extract, url)
+                for (title, extract, url) in pages {
+                    if !extract.is_empty() {
+                        page_content_opt = Some(extract.clone());
+                        actual_page_title_opt = Some(title.clone());
+                        page_url_opt = Some(url.clone());
+                        break; // Found a usable page
+                    }
+                }
+
+                if let (Some(content), Some(title), Some(url)) =
+                    (page_content_opt, actual_page_title_opt, page_url_opt)
+                {
+                    if visited_page_titles.contains(&title) {
+                        log::debug!("Skipping already visited Wikipedia page title: {}", title);
+                        continue;
+                    }
+
+                    log::info!("Adding page to results: '{}'", title);
+                    all_found_info.push(IterativeSearchResult {
+                        title: title.clone(),
+                        summary: content.clone(), // Using the full extract as the summary
+                        url: url.clone(),
+                        path_taken: current_path.clone(),
+                    });
+
+                    visited_page_titles.insert(title.clone());
+
+                    // Only analyze if we haven't hit max_iterations for the *next* step
+                    if current_iteration < max_iterations {
+                        let visited_titles_vec: Vec<String> =
+                            visited_page_titles.iter().cloned().collect();
+                        match analyze_wikipedia_page_for_iteration(
+                            client,
+                            initial_user_query,
+                            &current_term,
+                            &title,
+                            &content,
+                            &visited_titles_vec,
+                            gemini_api_key,
+                            model_name,
+                        )
+                        .await
+                        {
+                            Ok(decision) => match decision {
+                                AnalysisLLMDecision::FoundAnswer {
+                                    summary: llm_summary,
+                                    title: found_title,
+                                } => {
+                                    log::info!(
+                                        "LLM indicated page '{}' (summary: '{}') as directly answering query '{}'. Information already captured.",
+                                        found_title,
+                                        llm_summary,
+                                        initial_user_query
+                                    );
+                                    // Optionally, one could update the summary in all_found_info if llm_summary is preferred,
+                                    // or simply stop this particular search path by not queueing further terms from it.
+                                }
+                                AnalysisLLMDecision::NextTerm {
+                                    term: next_term,
+                                    reason,
+                                } => {
+                                    log::info!(
+                                        "Next term for '{}' is '{}'. Reason: {}",
+                                        initial_user_query,
+                                        next_term,
+                                        reason
+                                    );
+                                    // Check conditions for adding to queue
+                                    if !visited_page_titles.contains(&next_term)
+                                        && !search_queue.iter().any(|(t, _)| t == &next_term)
+                                        && current_path.len() < max_iterations
+                                    // Path depth check
+                                    {
+                                        let mut next_path = current_path.clone();
+                                        next_path.push(next_term.clone());
+                                        search_queue.push_back((next_term, next_path));
+                                    } else {
+                                        log::debug!("Skipping next term suggestion '{}': already visited, in queue, or path too deep.", next_term);
+                                    }
+                                }
+                                AnalysisLLMDecision::Stop { reason } => {
+                                    log::info!(
+                                        "Stopping search on path {:?} for query '{}'. Reason: {}",
+                                        current_path,
+                                        initial_user_query,
+                                        reason
+                                    );
+                                }
+                            },
+                            Err(e) => {
+                                log::error!("Error analyzing Wikipedia content for term '{}', page title '{}': {}", current_term, title, e);
+                            }
+                        }
+                    } else {
+                        log::info!("Max iterations reached after processing page '{}'. Not analyzing for next steps.", title);
+                    }
+                } else {
+                    log::warn!(
+                                            "No usable content found for Wikipedia term '{}' after processing API results.",
+                                            current_term
+                                        );
+                    visited_page_titles.insert(current_term.clone()); // Mark term as processed to avoid retrying if it yields nothing
+                }
+            }
+            Err(e) => {
+                log::error!(
+                    "Error performing Wikipedia lookup for term '{}': {}",
+                    current_term,
+                    e
+                );
+                visited_page_titles.insert(current_term.clone());
+            }
+        }
+    }
+    log::info!(
+        "Finished iterative Wikipedia research for query: '{}'. Found {} results.",
+        initial_user_query,
+        all_found_info.len()
+    );
+    Ok(all_found_info)
 }
 
 // --- UPDATED: Weather Lookup Function (uses location extractor) ---
@@ -2443,6 +2787,9 @@ pub fn run() {
                             panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
                             log::info!("Set NSWindowStyleMaskNonActivatingPanel(1 << 7) on NSPanel.");
 
+                            // The following macro may use deprecated cocoa::base::id and nil, but
+                            // this is required by the tauri_nspanel API for now.
+                            #[allow(deprecated)]
                             let delegate = panel_delegate!(NSPanelDelegateHook {
                                 window_should_become_key
                             });

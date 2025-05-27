@@ -121,6 +121,7 @@ body {
     /* justify-content: flex-end; */ /* Handled by #chat-history now */
     overflow: hidden; /* Prevent this container from scrolling, #chat-history will scroll */
     position: relative; /* For potential future absolute positioned children if any */
+    margin-top: 20px;
 }
 
 /* Chat History - Fix Order & Bottom Alignment & Hide Scrollbar */
@@ -153,7 +154,7 @@ body {
         transform: translateY(10px);
     }
     to {
-        opacity: 0.89; /* Match final message opacity */
+        opacity: 1; /* Match final message opacity */
         transform: translateY(0);
     }
 }
@@ -167,7 +168,7 @@ body {
     word-wrap: break-word; /* Wrap long words */
     color: rgba(255, 255, 255, 0.95); /* Slightly brighter text */
     font-size: 0.9em; /* Reduce message font size */
-    opacity: 0.89; /* Apply opacity */
+    opacity: 1; /* Apply opacity */
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); /* Add shadow for depth */
     backdrop-filter: blur(50px);
     animation: fadeInUp 0.3s ease-out; /* Apply animation */

@@ -4,23 +4,22 @@ A Tauri application for easy interaction with AI models.
 
 ## Features
 
-*   Chat Interface
+*   Chat Interface with Streamed Responses
 *   Free Models (DeepSeek V3, Gemini Flash, DeepSeek R1)
 *   API Key Management (OpenRouter & Google)
 *   **Screen Capture + OCR Analysis** (Requires Tesseract)
-*   Markdown Rendering
-*   LaTeX Rendering
-*   Streaming Responses
+*   Markdown & LaTeX Rendering
 *   Background Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt
-*   Reasoning for R1
-*   LaTeX Delimiter Support
+*   Reasoning Data for R1
 *   Financial Data from Yahoo Finance
 *   Weather Data from Open-Meteo
-*   General Knowledge Search from Wikipedia
+*   General Data from Wikipedia
+*   Wikipedia Research Loop (up to 4 searches)
 
 ### In Progress Features
 
+*   Reasoning Summaries from Gemini (Feature 0.5.X 🛠️)
 *   YT Video Summarization (Idea 0.5.X 💡)
 *   Custom System Prompt (Idea 0.5.X 💡)
 

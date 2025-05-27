@@ -791,8 +791,8 @@ interface ArticleLookupCompletedPayload {
   query: string;
   success: boolean;
   summary?: string | null;
-  source_name?: string | null;
-  source_url?: string | null;
+  source_name?: string[] | null;
+  source_url?: string[] | null;
   error?: string | null;
 }
 
@@ -987,24 +987,56 @@ async function setupStreamListeners() {
           if (event.payload.source_name || event.payload.source_url) {
             const sourceInfo = document.createElement("p");
             sourceInfo.classList.add("web-search-source-info");
-            sourceInfo.appendChild(document.createTextNode("Source: "));
+            sourceInfo.appendChild(document.createTextNode("Sources: "));
 
-            if (event.payload.source_name && event.payload.source_url) {
-              const sourceLink = document.createElement("a");
-              sourceLink.href = event.payload.source_url;
-              sourceLink.textContent = event.payload.source_name;
-              sourceLink.target = "_blank";
-              sourceLink.rel = "noopener noreferrer";
-              sourceInfo.appendChild(sourceLink);
-            } else if (event.payload.source_name) {
-              sourceInfo.appendChild(document.createTextNode(event.payload.source_name));
-            } else if (event.payload.source_url) {
-              const sourceLink = document.createElement("a");
-              sourceLink.href = event.payload.source_url;
-              sourceLink.textContent = event.payload.source_url;
-              sourceLink.target = "_blank";
-              sourceLink.rel = "noopener noreferrer";
-              sourceInfo.appendChild(sourceLink);
+            const payload_source_names = event.payload.source_name; // string[] | undefined
+            const payload_source_urls = event.payload.source_url; // string[] | undefined
+
+            console.log("Lengths:", payload_source_names?.length, payload_source_urls?.length);
+
+            if (
+              payload_source_names &&
+              payload_source_urls &&
+              payload_source_names.length > 0 &&
+              payload_source_names.length === payload_source_urls.length
+            ) {
+              console.log(
+                "Source names and URLs available:",
+                payload_source_names,
+                payload_source_urls,
+              );
+              payload_source_names.forEach((name, index) => {
+                const url = payload_source_urls[index];
+                const sourceLink = document.createElement("a");
+                sourceLink.href = url;
+                sourceLink.textContent = name;
+                sourceLink.target = "_blank";
+                sourceLink.rel = "noreferrer";
+                sourceInfo.appendChild(sourceLink);
+                if (index < payload_source_names.length - 1) {
+                  sourceInfo.appendChild(document.createTextNode(", "));
+                }
+              });
+            } else if (payload_source_names && payload_source_names.length > 0) {
+              // Only names available
+              sourceInfo.appendChild(document.createTextNode(payload_source_names.join(", ")));
+            } else if (payload_source_urls && payload_source_urls.length > 0) {
+              // Only URLs available
+              payload_source_urls.forEach((url, index) => {
+                const sourceLink = document.createElement("a");
+                sourceLink.href = url;
+                sourceLink.textContent = url; // Use URL as text if no name
+                sourceLink.target = "_blank";
+                sourceLink.rel = "noopener noreferrer";
+                sourceInfo.appendChild(sourceLink);
+                if (index < payload_source_urls.length - 1) {
+                  sourceInfo.appendChild(document.createTextNode(", "));
+                }
+              });
+            } else {
+              // Fallback if no source names or URLs are provided in the payload
+              // If you prefer "N/A" when payloaCompare France and Germanyd sources are empty:
+              sourceInfo.appendChild(document.createTextNode("Sources: N/A"));
             }
             searchContentDiv.appendChild(sourceInfo);
           }

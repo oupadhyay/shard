@@ -26,7 +26,7 @@ use yahoo_finance_api as yfa; // Using an alias for brevity // For timestamp con
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 
 // --- System Instruction ---
-const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links and $$ for LaTeX equations.";
+const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links. For math: use $$....$$ for display equations (centered, full-line) and \\(...\\) for inline math (within text). Never mix $ and $$ syntax.";
 
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]

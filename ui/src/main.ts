@@ -80,7 +80,7 @@ interface ChatMessage {
 }
 
 // --- System Instruction (matches backend) ---
-const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links and $$ for LaTeX equations.`;
+const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links. For math: use $$....$$ for display equations (centered, full-line) and \\(...\\) for inline math (within text). Never mix $ and $$ syntax.`;
 
 // --- Constants for History Management ---
 const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
@@ -108,6 +108,38 @@ function preprocessLatex(content: string): string {
   // Replace \[ ... \] with $$ ... $$
   content = content.replace(/\\\[/g, "$$");
   content = content.replace(/\\\]/g, "$$");
+  return content;
+}
+
+// --- Helper function to clean LaTeX/MathML markup from text ---
+function cleanLatexMarkup(content: string): string {
+  // Remove LaTeX displaystyle blocks like {\displaystyle ...}
+  content = content.replace(/\{\s*\\displaystyle\s+[^}]*\}/g, "");
+
+  // Remove MathML-style markup with nested tags
+  content = content.replace(/<[^>]*>/g, "");
+
+  // Remove excessive whitespace between mathematical symbols
+  content = content.replace(/\s+/g, " ");
+
+  // Clean up common LaTeX commands and keep just the symbols
+  content = content.replace(/\\mathbf\s*\{\s*([^}]+)\s*\}/g, "$1");
+  content = content.replace(/\\varepsilon/g, "ε");
+  content = content.replace(/\\mu/g, "μ");
+  content = content.replace(/\\nabla/g, "∇");
+  content = content.replace(/\\cdot/g, "⋅");
+  content = content.replace(/\\times/g, "×");
+  content = content.replace(/\\partial/g, "∂");
+  content = content.replace(/\\frac\s*\{\s*([^}]+)\s*\}\s*\{\s*([^}]+)\s*\}/g, "($1)/($2)");
+
+  // Remove remaining LaTeX markup patterns
+  content = content.replace(/\\\w+\s*\{[^}]*\}/g, "");
+  content = content.replace(/\\\w+/g, "");
+  content = content.replace(/[\{\}]/g, "");
+
+  // Clean up extra spaces and normalize
+  content = content.replace(/\s+/g, " ").trim();
+
   return content;
 }
 
@@ -339,7 +371,7 @@ async function addMessageToHistory(
 
   // ADDED: Check if this is the first USER message to show System Prompt
   if (sender === "You" && chatMessageHistory.length === 0) {
-    const { accordion, toggle, content } = createCustomAccordion("Show System Prompt", "reasoning");
+    const { accordion, content } = createCustomAccordion("Show System Prompt", "reasoning");
     accordion.style.marginTop = "10px"; // Add some space above the accordion
 
     const pre = document.createElement("pre");
@@ -365,7 +397,7 @@ async function addMessageToHistory(
   // Add reasoning accordion if reasoning is present for assistant messages
   // Add reasoning if provided
   if (sender === "Shard" && reasoning) {
-    const { accordion, toggle, content } = createCustomAccordion("Show Reasoning", "reasoning");
+    const { accordion, content } = createCustomAccordion("Show Reasoning", "reasoning");
 
     // Display reasoning as preformatted text for now
     const pre = document.createElement("pre");
@@ -664,7 +696,7 @@ function ensureReasoningAccordion(messageDiv: HTMLElement) {
   if (!reasoningAccordion) {
     const { accordion, toggle, content } = createCustomAccordion("Reasoning", "reasoning");
     toggle.setAttribute("aria-expanded", "true"); // Start open
-    content.classList.add('open'); // Start open
+    content.classList.add("open"); // Start open
 
     const reasoningDiv = document.createElement("div");
     content.appendChild(reasoningDiv);
@@ -996,8 +1028,11 @@ async function setupStreamListeners() {
         }
 
         if (event.payload.success && event.payload.summary) {
-          const { accordion, toggle, content } = createCustomAccordion(`Wikipedia Results: "${event.payload.query}"`, "web-search");
-          
+          const { accordion, toggle, content } = createCustomAccordion(
+            `Wikipedia Results: "${event.payload.query}"`,
+            "web-search",
+          );
+
           const globeIcon = createGlobeIcon();
           addIconToToggle(toggle, globeIcon);
 
@@ -1061,10 +1096,10 @@ async function setupStreamListeners() {
           }
 
           if (event.payload.summary) {
-            const summaryPre = document.createElement("pre");
-            summaryPre.classList.add("web-search-answer");
-            summaryPre.textContent = event.payload.summary;
-            searchContentDiv.appendChild(summaryPre);
+            const summaryDiv = document.createElement("div");
+            summaryDiv.classList.add("web-search-answer");
+            summaryDiv.textContent = cleanLatexMarkup(event.payload.summary);
+            searchContentDiv.appendChild(summaryDiv);
           }
 
           currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
@@ -1140,21 +1175,23 @@ async function setupStreamListeners() {
           fetchingStatusContainer.remove();
         }
 
-        const { accordion, toggle, content } = createCustomAccordion(`Financial Data for: "${event.payload.symbol}"`, "web-search");
-        
+        const { accordion, toggle, content } = createCustomAccordion(
+          `Financial Data for: "${event.payload.symbol}"`,
+          "web-search",
+        );
+
         const financialIcon = createFinancialIcon();
         addIconToToggle(toggle, financialIcon);
 
         const financialContentDiv = content;
-        financialContentDiv.classList.add('financial-content');
+        financialContentDiv.classList.add("financial-content");
 
         if (event.payload.success && event.payload.symbol && event.payload.data) {
           // Success with data
-          const dataPre = document.createElement("pre");
-          dataPre.classList.add("financial-data-text");
-          dataPre.style.whiteSpace = "pre-wrap";
-          dataPre.textContent = event.payload.data;
-          financialContentDiv.appendChild(dataPre);
+          const dataDiv = document.createElement("div");
+          dataDiv.classList.add("financial-data-text");
+          dataDiv.textContent = event.payload.data;
+          financialContentDiv.appendChild(dataDiv);
         } else {
           // Error or No Data case
           const errorParagraph = document.createElement("p");
@@ -1180,7 +1217,7 @@ async function setupStreamListeners() {
 
           // Optionally open the accordion if there's an error/tip
           toggle.setAttribute("aria-expanded", "true");
-          content.classList.add('open');
+          content.classList.add("open");
         }
 
         currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
@@ -1245,7 +1282,10 @@ async function setupStreamListeners() {
           order.forEach((type) => {
             const accordionToPrepend = accordions.find((a) => a.type === type);
             if (accordionToPrepend && currentAssistantContentDiv) {
-              currentAssistantContentDiv.insertBefore(accordionToPrepend.element, currentAssistantContentDiv.firstChild);
+              currentAssistantContentDiv.insertBefore(
+                accordionToPrepend.element,
+                currentAssistantContentDiv.firstChild,
+              );
             }
           });
         }
@@ -1260,15 +1300,20 @@ async function setupStreamListeners() {
       ) as HTMLElement;
       console.log("STREAM_END: Found reasoningAccordion:", reasoningAccordion);
       if (reasoningAccordion) {
-        const toggle = reasoningAccordion.querySelector(".reasoning-accordion-toggle") as HTMLButtonElement;
-        console.log("STREAM_END: reasoningAccordion expanded BEFORE:", toggle?.getAttribute("aria-expanded"));
+        const toggle = reasoningAccordion.querySelector(
+          ".reasoning-accordion-toggle",
+        ) as HTMLButtonElement;
+        console.log(
+          "STREAM_END: reasoningAccordion expanded BEFORE:",
+          toggle?.getAttribute("aria-expanded"),
+        );
       }
 
       if (event.payload.reasoning) {
         // If STREAM_END payload has reasoning, ensure accordion exists and update it
         if (!reasoningAccordion) {
           // Create new reasoning accordion if it doesn't exist
-          const { accordion, toggle, content } = createCustomAccordion("Reasoning", "reasoning");
+          const { accordion, content } = createCustomAccordion("Reasoning", "reasoning");
           const reasoningDiv = document.createElement("div");
           content.appendChild(reasoningDiv);
           reasoningAccordion = accordion;
@@ -1286,7 +1331,9 @@ async function setupStreamListeners() {
       // If a reasoning accordion exists (either pre-existing or created above),
       // close it and set its toggle text.
       if (reasoningAccordion) {
-        const toggle = reasoningAccordion.querySelector(".reasoning-accordion-toggle") as HTMLButtonElement;
+        const toggle = reasoningAccordion.querySelector(
+          ".reasoning-accordion-toggle",
+        ) as HTMLButtonElement;
         const content = reasoningAccordion.querySelector(".reasoning-content") as HTMLElement;
         if (toggle && content) {
           console.log(
@@ -1294,7 +1341,7 @@ async function setupStreamListeners() {
             toggle.getAttribute("aria-expanded"),
           );
           toggle.setAttribute("aria-expanded", "false");
-          content.classList.remove('open');
+          content.classList.remove("open");
           console.log(
             "STREAM_END: reasoningAccordion expanded AFTER setting to false:",
             toggle.getAttribute("aria-expanded"),
@@ -1414,13 +1461,16 @@ async function setupStreamListeners() {
         );
         if (statusContainer) statusContainer.remove();
 
-        const { accordion, toggle, content } = createCustomAccordion(`Weather Information for: "${event.payload.location}"`, "web-search");
-        
+        const { accordion, toggle, content } = createCustomAccordion(
+          `Weather Information for: "${event.payload.location}"`,
+          "web-search",
+        );
+
         const weatherIcon = createThermometerIcon(); // Static icon for summary
         addIconToToggle(toggle, weatherIcon);
 
         const weatherContentDiv = content;
-        weatherContentDiv.classList.add('weather-content');
+        weatherContentDiv.classList.add("weather-content");
 
         if (
           event.payload.success &&
@@ -1466,7 +1516,7 @@ async function setupStreamListeners() {
 
           // Optionally open the accordion if there's an error
           toggle.setAttribute("aria-expanded", "true");
-          content.classList.add('open');
+          content.classList.add("open");
         }
 
         currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
@@ -1841,32 +1891,36 @@ listen("toggle-main-window", async () => {
 console.log("Frontend listener for toggle-main-window set up.");
 
 // Custom accordion helper functions
-function createCustomAccordion(title: string, type: 'reasoning' | 'web-search'): { accordion: HTMLElement, toggle: HTMLButtonElement, content: HTMLElement } {
+function createCustomAccordion(
+  title: string,
+  type: "reasoning" | "web-search",
+): { accordion: HTMLElement; toggle: HTMLButtonElement; content: HTMLElement } {
   const accordion = document.createElement("div");
-  accordion.className = type === 'reasoning' ? "reasoning-accordion" : "web-search-accordion";
-  
+  accordion.className = type === "reasoning" ? "reasoning-accordion" : "web-search-accordion";
+
   const toggle = document.createElement("button");
-  toggle.className = type === 'reasoning' ? "reasoning-accordion-toggle" : "web-search-accordion-toggle";
+  toggle.className =
+    type === "reasoning" ? "reasoning-accordion-toggle" : "web-search-accordion-toggle";
   toggle.setAttribute("aria-expanded", "false");
   toggle.setAttribute("aria-controls", `${type}-content-${Date.now()}`);
   toggle.textContent = title;
-  
+
   const content = document.createElement("div");
-  content.className = type === 'reasoning' ? "reasoning-content" : "web-search-content";
+  content.className = type === "reasoning" ? "reasoning-content" : "web-search-content";
   content.id = toggle.getAttribute("aria-controls")!;
   content.setAttribute("role", "region");
   content.setAttribute("aria-labelledby", toggle.id || "");
-  
+
   // Add click handler
-  toggle.addEventListener('click', () => {
+  toggle.addEventListener("click", () => {
     const isOpen = toggle.getAttribute("aria-expanded") === "true";
     toggle.setAttribute("aria-expanded", (!isOpen).toString());
-    content.classList.toggle('open', !isOpen);
+    content.classList.toggle("open", !isOpen);
   });
-  
+
   accordion.appendChild(toggle);
   accordion.appendChild(content);
-  
+
   return { accordion, toggle, content };
 }
 

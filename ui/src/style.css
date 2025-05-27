@@ -169,9 +169,7 @@ body {
     font-size: 0.9em; /* Reduce message font size */
     opacity: 0.89; /* Apply opacity */
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); /* Add shadow for depth */
-    backdrop-filter: blur(
-        50px
-    );
+    backdrop-filter: blur(50px);
     animation: fadeInUp 0.3s ease-out; /* Apply animation */
 }
 
@@ -472,10 +470,10 @@ body {
     padding: 4px 0; /* Add some vertical padding if desired */
 
     position: fixed; /* ADDED */
-    left: 15px;      /* ADDED: Align with input-area */
-    right: 15px;     /* ADDED: Align with input-area */
+    left: 15px; /* ADDED: Align with input-area */
+    right: 15px; /* ADDED: Align with input-area */
     width: calc(100% - 30px); /* ADDED: Align with input-area */
-    z-index: 10;     /* ADDED: Same stacking context as input-area */
+    z-index: 10; /* ADDED: Same stacking context as input-area */
     box-sizing: border-box; /* ADDED */
 }
 
@@ -732,7 +730,7 @@ body {
     resize: none; /* Disable manual resize handle */
     overflow-y: hidden; /* Hide scrollbar, rely on JS for height */
     line-height: 1.4; /* Match body line-height */
-    min-height: calc(1em * 1.4); /* Start at single line height */
+    min-height: 30px; /* Start at single line height */
     font-family: inherit; /* Ensure font matches */
     white-space: pre-wrap; /* Respect newlines and wrap */
     word-wrap: break-word; /* Break long words */
@@ -808,7 +806,6 @@ body.fade-out {
     height: 20px;
 }
 
-
 .lucide-thermometer {
     height: 30px;
     width: auto;
@@ -823,108 +820,112 @@ body.fade-out {
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
 }
 
 /* ADDED: Styles for Financial Data Globe Icon and Status */
 .financial-data-status-container {
-  display: flex;
-  align-items: center;
-  gap: 8px; /* Space between icon and text */
-  padding: 5px 0; /* Some vertical padding */
-  font-style: italic;
-  color: var(--text-secondary-color); /* Or your preferred color */
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Space between icon and text */
+    padding: 5px 0; /* Some vertical padding */
+    font-style: italic;
+    color: var(--text-secondary-color); /* Or your preferred color */
 }
 
 .financial-data-status-text {
-  font-size: 0.9em;
+    font-size: 0.9em;
 }
 
 .financial-data-source-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0; /* Adjust padding as needed */
-  margin-bottom: 8px; /* Space before the main LLM content */
-  font-size: 0.85em; /* Slightly smaller than main text */
-  color: var(--text-secondary-color); /* Or your preferred color */
-  border-bottom: 1px solid var(--border-color); /* Optional: a light separator */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0; /* Adjust padding as needed */
+    margin-bottom: 8px; /* Space before the main LLM content */
+    font-size: 0.85em; /* Slightly smaller than main text */
+    color: var(--text-secondary-color); /* Or your preferred color */
+    border-bottom: 1px solid var(--border-color); /* Optional: a light separator */
 }
 
 /* ADDED: Styles for the persistent Web Search Source container */
 .web-search-source-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0; /* Similar to financial-data-source-container */
-  margin-bottom: 8px; /* Space before the main LLM content */
-  font-size: 0.85em; /* Slightly smaller than main text */
-  color: rgba(255, 255, 255, 0.7); /* Consistent with other secondary text */
-  /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */ /* Optional: a very light separator */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0; /* Similar to financial-data-source-container */
+    margin-bottom: 8px; /* Space before the main LLM content */
+    font-size: 0.85em; /* Slightly smaller than main text */
+    color: rgba(255, 255, 255, 0.7); /* Consistent with other secondary text */
+    /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */ /* Optional: a very light separator */
 }
 
 .web-search-accordion {
-  margin-bottom: 5px;
-  border: 1px solid rgba(0, 0, 0, 0);
-  border-radius: 6px;
-  background-color: rgba(0, 0, 0, 0);
+    margin-bottom: 5px;
+    border: 1px solid rgba(0, 0, 0, 0);
+    border-radius: 6px;
+    background-color: rgba(0, 0, 0, 0);
 }
 
 .web-search-accordion summary {
-  padding: 0 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9em;
-  color: rgba(255, 255, 255, 0.7);
-  background-color: rgba(0, 0, 0, 0);
+    padding: 0 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.7);
+    background-color: rgba(0, 0, 0, 0);
 }
 
 .web-search-accordion summary:hover {
-  color: rgba(255, 255, 255, 0.8);
+    color: rgba(255, 255, 255, 0.8);
 }
 
 .web-search-content {
-  padding: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 0.9em;
-  color: rgba(255, 255, 255, 0.7);
-  background-color: rgba(0, 0, 0, 0.2);
-  border-radius: 8px;
+    padding: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.7);
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
 }
 
 .web-search-source-info {
-  font-style: italic;
+    font-style: italic;
 }
 
 .web-search-source-info a {
-  color: #007aff;
-  text-decoration: none;
+    color: #007aff;
+    text-decoration: none;
 }
 
 .web-search-source-info a:hover {
-  text-decoration: underline;
+    text-decoration: underline;
 }
 
 .web-search-answer {
-  margin: 0;
-  white-space: pre-wrap;
-  font-family: inherit;
-  background: none;
-  border: none;
-  padding: 0;
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: inherit;
+    background: none;
+    border: none;
+    padding: 0;
 }
 
 /* Add custom triangle marker for web search accordion */
 .web-search-accordion summary {
-  list-style: none; /* Remove default marker */
-  position: relative;
-  padding-left: 4px;
+    list-style: none; /* Remove default marker */
+    position: relative;
+    padding-left: 4px;
 }
 
 /* Hide summary marker on Webkit */
 .web-search-accordion summary::-webkit-details-marker {
-  display: none;
+    display: none;
 }

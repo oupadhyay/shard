@@ -1025,7 +1025,7 @@ async fn send_text_to_model(
                         }
                     };
 
-                    let mut decision = "NO_LOOKUP".to_string(); // Initialize decision
+                    let decision: String; // Initialize decision
                     if !decider_gemini_api_key_string.is_empty() {
                         match call_gemini_api_non_streaming(
                             &client,

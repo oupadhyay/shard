@@ -260,7 +260,7 @@ async function loadInitialSettings() {
 }
 
 // --- Helper to auto-resize textarea ---
-const initialTextareaHeight = "calc(2em * 1.4)";
+const initialTextareaHeight = "20px";
 function autoResizeTextarea() {
   if (!messageInput) return;
   messageInput.style.height = "auto";

@@ -618,23 +618,27 @@ body {
     padding-top: 8px;
 }
 
-.reasoning-accordion summary {
+.reasoning-accordion-toggle {
     cursor: pointer;
     font-size: 0.85em;
     color: rgba(255, 255, 255, 0.6);
-    list-style: none; /* Remove default marker */
     position: relative;
     padding-left: 18px; /* Space for custom marker */
     outline: none; /* Remove focus outline */
     transition: color 0.2s;
+    background: none;
+    border: none;
+    font-family: inherit;
+    text-align: left;
+    width: 100%;
 }
 
-.reasoning-accordion summary:hover {
+.reasoning-accordion-toggle:hover {
     color: rgba(255, 255, 255, 0.8);
 }
 
 /* Custom triangle marker */
-.reasoning-accordion summary::before {
+.reasoning-accordion-toggle::before {
     content: "▶";
     position: absolute;
     left: 0;
@@ -644,23 +648,33 @@ body {
     transform-origin: center;
 }
 
-.reasoning-accordion[open] > summary::before {
+.reasoning-accordion-toggle[aria-expanded="true"]::before {
     transform: rotate(90deg);
-}
-
-/* Hide summary marker on Webkit */
-.reasoning-accordion summary::-webkit-details-marker {
-    display: none;
 }
 
 .reasoning-content {
     margin-top: 8px;
-    padding: 10px;
+    padding: 0 10px;
     background-color: rgba(0, 0, 0, 0.15); /* Slightly different background */
     border-radius: 8px;
     font-size: 0.85em;
     color: rgba(255, 255, 255, 0.75);
-    overflow-x: auto; /* Allow horizontal scroll if needed */
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
+}
+
+.reasoning-content.open {
+    max-height: 300px;
+    opacity: 1;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    overflow-y: auto;
 }
 
 .reasoning-content pre {
@@ -668,6 +682,13 @@ body {
     word-wrap: break-word; /* Break words if necessary */
     margin: 0; /* Remove default pre margin */
     font-family: inherit; /* Use same font */
+}
+
+.reasoning-content h2 {
+    font-size: 1em;
+    margin: 4px 0 2px 0; /* More space above, less below */
+    font-weight: 600; /* Semi-bold */
+    color: rgba(255, 255, 255, 0.9); /* Slightly brighter than reasoning text */
 }
 
 /* Adjust thinking indicator styles slightly if needed */
@@ -873,7 +894,7 @@ body.fade-out {
     background-color: rgba(0, 0, 0, 0);
 }
 
-.web-search-accordion summary {
+.web-search-accordion-toggle {
     padding: 0 12px;
     cursor: pointer;
     display: flex;
@@ -882,19 +903,56 @@ body.fade-out {
     font-size: 0.9em;
     color: rgba(255, 255, 255, 0.7);
     background-color: rgba(0, 0, 0, 0);
+    border: none;
+    font-family: inherit;
+    width: 100%;
+    text-align: left;
 }
 
-.web-search-accordion summary:hover {
+.web-search-accordion-toggle:hover {
     color: rgba(255, 255, 255, 0.8);
 }
 
 .web-search-content {
-    padding: 12px;
+    padding: 0 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     font-size: 0.9em;
     color: rgba(255, 255, 255, 0.7);
     background-color: rgba(0, 0, 0, 0.2);
     border-radius: 8px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
+}
+
+.web-search-content.open {
+    max-height: 500px;
+    opacity: 1;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    overflow-y: auto;
+}
+
+/* Faster transitions for financial and weather content */
+.web-search-content.financial-content {
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
+}
+
+.web-search-content.weather-content {
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
 }
 
 .web-search-source-info {
@@ -920,13 +978,8 @@ body.fade-out {
 }
 
 /* Add custom triangle marker for web search accordion */
-.web-search-accordion summary {
+.web-search-accordion-toggle {
     list-style: none; /* Remove default marker */
     position: relative;
     padding-left: 4px;
-}
-
-/* Hide summary marker on Webkit */
-.web-search-accordion summary::-webkit-details-marker {
-    display: none;
 }

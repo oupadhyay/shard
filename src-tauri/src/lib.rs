@@ -26,7 +26,7 @@ use yahoo_finance_api as yfa; // Using an alias for brevity // For timestamp con
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 
 // --- System Instruction ---
-const SYSTEM_INSTRUCTION: &str = "You provide accurate, factual answers.\n  - If you do not know the answer, make your best guess.";
+const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links and $$ for LaTeX equations.";
 
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -136,11 +136,6 @@ struct GenerationConfigForGemini {
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking_config: Option<ThinkingConfig>,
     // In the future, other fields like temperature, maxOutputTokens can be added here
-    // For example:
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // temperature: Option<f32>,
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // max_output_tokens: Option<i32>,
 }
 
 #[derive(Serialize, Debug)]
@@ -332,6 +327,107 @@ struct WeatherResponse {
     elevation: Option<f32>,
     current_units: Option<WeatherCurrentUnits>,
     current: Option<WeatherCurrentData>,
+}
+
+fn separate_reasoning_from_content(text: &str) -> (String, String) {
+    let mut content_parts = Vec::new();
+    let mut reasoning_parts = Vec::new();
+
+    // Split text by reasoning block headers (lines that start and end with **)
+    let mut current_section = String::new();
+    let mut is_reasoning_section = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        // Check if this line is a reasoning block header
+        if trimmed.starts_with("**") && trimmed.ends_with("**") && trimmed.len() > 4 {
+            // Save the previous section
+            if !current_section.trim().is_empty() {
+                if is_reasoning_section {
+                    reasoning_parts.push(current_section.trim().to_string());
+                } else {
+                    content_parts.push(current_section.trim().to_string());
+                }
+            }
+
+            // Start new reasoning section with this header
+            current_section = line.to_string() + "\n";
+            is_reasoning_section = true;
+        } else {
+            // Add line to current section
+            current_section.push_str(line);
+            current_section.push('\n');
+
+            // Check if this looks like the end of reasoning and start of content
+            if is_reasoning_section && !trimmed.is_empty() {
+                // Simple heuristic: if line doesn't contain reasoning-style language
+                // and doesn't start with common reasoning words, it might be content
+                let reasoning_indicators = [
+                    "I'm",
+                    "I've",
+                    "My goal",
+                    "I will",
+                    "I need",
+                    "I want",
+                    "I think",
+                    "I believe",
+                    "I should",
+                    "I'll",
+                ];
+                let has_reasoning_language = reasoning_indicators
+                    .iter()
+                    .any(|&indicator| trimmed.contains(indicator));
+
+                // Also check if this looks like a final answer or regular response
+                let looks_like_final_answer = trimmed.len() > 20
+                    && !has_reasoning_language
+                    && (trimmed.ends_with('.') || trimmed.ends_with('!') || trimmed.ends_with('?'));
+
+                if looks_like_final_answer {
+                    // This seems to be the start of the actual response
+                    // Split the current section
+                    let lines_in_section: Vec<&str> = current_section.trim().lines().collect();
+                    if lines_in_section.len() > 1 {
+                        // Last line is probably content, rest is reasoning
+                        let reasoning_part =
+                            lines_in_section[..lines_in_section.len() - 1].join("\n");
+                        let content_part = lines_in_section.last().unwrap();
+
+                        if !reasoning_part.trim().is_empty() {
+                            reasoning_parts.push(reasoning_part.trim().to_string());
+                        }
+
+                        current_section = content_part.to_string() + "\n";
+                        is_reasoning_section = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Add the final section
+    if !current_section.trim().is_empty() {
+        if is_reasoning_section {
+            reasoning_parts.push(current_section.trim().to_string());
+        } else {
+            content_parts.push(current_section.trim().to_string());
+        }
+    }
+
+    // Join parts with proper spacing
+    let content = content_parts.join("\n\n").trim().to_string();
+    let mut reasoning = reasoning_parts.join("\n\n").trim().to_string();
+
+    // Convert **Header** patterns to proper markdown headers with spacing
+    // Find any **Header** pattern and replace with proper newlines + ## header
+    let re = regex::Regex::new(r"\*\*([^*]+?)\*\*").unwrap();
+    reasoning = re.replace_all(&reasoning, "\n\n## $1").to_string();
+
+    // Clean up any multiple newlines and ensure proper start
+    reasoning = reasoning.replace("\n\n\n", "\n\n").to_string();
+
+    (content, reasoning)
 }
 
 // --- ADDED: Wikipedia Lookup Function ---
@@ -1133,7 +1229,7 @@ async fn send_text_to_model(
                                     let mut combined_source_names = Vec::<String>::new();
                                     let mut combined_source_urls = Vec::<String>::new();
 
-                                    for (i, res) in results.iter().enumerate() {
+                                    for (_i, res) in results.iter().enumerate() {
                                         combined_summary.push_str(&format!(
                                             "Title: {}\nSummary: {}\n\n",
                                             res.title, res.summary,
@@ -1573,12 +1669,14 @@ async fn call_gemini_api(
         // This is "Gemini 2.5 Flash (Thinking)" (default thinking, no specific budget)
         actual_model_name_for_api = "gemini-2.5-flash-preview-05-20".to_string(); // Use base model name for API
         gen_config = Some(GenerationConfigForGemini {
-            thinking_config: None, // No specific thinking_config, so model uses its defaults.
-                                   // This means neither include_thoughts nor thinking_budget will be sent.
-                                   // ..Default::default()
+            thinking_config: Some(ThinkingConfig {
+                include_thoughts: Some(true),
+                thinking_budget: None,
+            }),
+            // This means include_thoughts is true and thinking_budget is non-zero.
         });
     }
-    // For other gemini models, gen_config remains None, and no specific generation_config will be sent.
+    // For other gemini models, gen_config remains None (no other thinking models), and no specific generation_config will be sent.
 
     let api_url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}&alt=sse",
@@ -1656,18 +1754,41 @@ async fn call_gemini_api(
                                                 data_json_str,
                                             ) {
                                                 Ok(gemini_response_chunk) => {
+                                                    let current_chunk_content: String;
+                                                    let mut current_chunk_reasoning: Option<
+                                                        String,
+                                                    > = None;
+
+                                                    // Process candidates for content
                                                     if let Some(candidate) =
                                                         gemini_response_chunk.candidates.get(0)
                                                     {
                                                         if let Some(part) =
                                                             candidate.content.parts.get(0)
                                                         {
-                                                            let delta = &part.text;
-                                                            accumulated_content.push_str(delta);
+                                                            let content_text = &part.text;
+
+                                                            // Parse reasoning from content
+                                                            let (content, reasoning) =
+                                                                separate_reasoning_from_content(
+                                                                    content_text,
+                                                                );
+                                                            current_chunk_content = content;
+                                                            if !reasoning.is_empty() {
+                                                                current_chunk_reasoning =
+                                                                    Some(reasoning);
+                                                            }
+
+                                                            accumulated_content
+                                                                .push_str(&current_chunk_content);
+
+                                                            // Emit using new StreamChoiceDelta structure
                                                             if let Err(e) = window.emit(
                                                                 "STREAM_CHUNK",
-                                                                StreamChunkPayload {
-                                                                    delta: Some(delta.clone()),
+                                                                StreamChoiceDelta {
+                                                                    content: if current_chunk_content.is_empty() { None } else { Some(current_chunk_content) },
+                                                                    role: Some("assistant".to_string()),
+                                                                    reasoning: current_chunk_reasoning,
                                                                 },
                                                             ) {
                                                                 log::error!("Failed to emit STREAM_CHUNK for Gemini: {}", e);
@@ -1736,11 +1857,20 @@ async fn call_gemini_api(
                     "Gemini stream finished. Accumulated content: {}",
                     accumulated_content
                 );
+
+                // Final separation of reasoning from content for stream end
+                let (final_content, final_reasoning) =
+                    separate_reasoning_from_content(&accumulated_content);
+
                 let _ = window.emit(
                     "STREAM_END",
                     StreamEndPayload {
-                        full_content: accumulated_content.clone(),
-                        reasoning: None, // Gemini API doesn't typically provide separate reasoning field in this way
+                        full_content: final_content,
+                        reasoning: if final_reasoning.is_empty() {
+                            None
+                        } else {
+                            Some(final_reasoning)
+                        },
                     },
                 );
                 Ok(())
@@ -2233,7 +2363,7 @@ async fn analyze_wikipedia_page_for_iteration(
     gemini_api_key: &str,
     model_name: &str,
 ) -> Result<AnalysisLLMDecision, String> {
-    const MAX_CONTENT_CHARS: usize = 150000;
+    const MAX_CONTENT_CHARS: usize = 100000;
     let truncated_content = if page_content.chars().count() > MAX_CONTENT_CHARS {
         page_content
             .chars()

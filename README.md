@@ -11,7 +11,7 @@ A Tauri application for easy interaction with AI models.
 *   Markdown & LaTeX Rendering
 *   Background Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt
-*   Reasoning Data for R1
+*   Reasoning Data for R1 & Reasoning Summaries for Gemini
 *   Financial Data from Yahoo Finance
 *   Weather Data from Open-Meteo
 *   General Data from Wikipedia
@@ -19,7 +19,6 @@ A Tauri application for easy interaction with AI models.
 
 ### In Progress Features
 
-*   Reasoning Summaries from Gemini (Feature 0.5.X 🛠️)
 *   YT Video Summarization (Idea 0.5.X 💡)
 *   Custom System Prompt (Idea 0.5.X 💡)
 

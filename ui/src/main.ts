@@ -80,7 +80,7 @@ interface ChatMessage {
 }
 
 // --- System Instruction (matches backend) ---
-const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links. For math: use $$....$$ for display equations (centered, full-line) and \\(...\\) for inline math (within text). Never mix $ and $$ syntax.`;
+const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax. You have perfect grammer, punctuation, and syntax.`;
 
 // --- Constants for History Management ---
 const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
@@ -738,6 +738,8 @@ let unlistenWeatherLookupStarted: (() => void) | null = null;
 let unlistenWeatherLookupCompleted: (() => void) | null = null;
 let unlistenFinancialDataStarted: (() => void) | null = null;
 let unlistenFinancialDataCompleted: (() => void) | null = null;
+let unlistenArxivLookupStarted: (() => void) | null = null; // ADDED
+let unlistenArxivLookupCompleted: (() => void) | null = null; // ADDED
 
 // Buffer and flag for batched animation of stream chunks
 let streamDeltaBuffer = "";
@@ -827,6 +829,30 @@ function createFinancialIcon(): SVGSVGElement {
   return icon;
 }
 
+// --- ADDED: Helper function to create ArXiv Icon (Book Icon) ---
+function createArxivIcon(): SVGSVGElement {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(svgNS, "svg");
+  icon.setAttribute("width", "24");
+  icon.setAttribute("height", "24");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.classList.add("lucide", "lucide-book-icon", "lucide-book"); // Using book icon
+
+  const path1 = document.createElementNS(svgNS, "path");
+  path1.setAttribute("d", "M4 19.5A2.5 2.5 0 0 1 6.5 17H20");
+  icon.appendChild(path1);
+  const path2 = document.createElementNS(svgNS, "path");
+  path2.setAttribute("d", "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z");
+  icon.appendChild(path2);
+
+  return icon;
+}
+
 // --- Define interfaces for Article Lookup event payloads --- (Matches backend)
 interface ArticleLookupStartedPayload {
   query: string;
@@ -863,6 +889,27 @@ interface FinancialDataCompletedPayload {
   symbol: string;
   success: boolean;
   data?: string | null;
+  error?: string | null;
+}
+
+// --- ADDED: Define interfaces for ArXiv Lookup event payloads --- (Matches backend)
+interface ArxivPaperSummary {
+  title: string;
+  summary: string;
+  authors: string[];
+  id: string;
+  published_date?: string | null;
+  pdf_url: string;
+}
+
+interface ArxivLookupStartedPayload {
+  query: string;
+}
+
+interface ArxivLookupCompletedPayload {
+  query: string;
+  success: boolean;
+  results?: ArxivPaperSummary[] | null;
   error?: string | null;
 }
 
@@ -1257,6 +1304,7 @@ async function setupStreamListeners() {
             let type = "article";
             if (accordionElement.querySelector(".weather-info-text")) type = "weather";
             else if (accordionElement.querySelector(".financial-data-text")) type = "financial";
+            else if (accordionElement.querySelector(".arxiv-paper-summary")) type = "arxiv"; // ADDED for ArXiv
             accordions.push({
               element: accordionElement,
               type: type,
@@ -1278,7 +1326,7 @@ async function setupStreamListeners() {
 
         // And again before inserting DOM elements
         if (currentAssistantContentDiv) {
-          const order = ["article", "weather", "financial"];
+          const order = ["article", "weather", "financial", "arxiv"]; // ADDED "arxiv" to order
           order.forEach((type) => {
             const accordionToPrepend = accordions.find((a) => a.type === type);
             if (accordionToPrepend && currentAssistantContentDiv) {
@@ -1537,6 +1585,138 @@ async function setupStreamListeners() {
     },
   );
   // --- END WEATHER LOOKUP LISTENERS ---
+
+  // --- ARXIV LOOKUP LISTENERS ---
+  if (unlistenArxivLookupStarted) unlistenArxivLookupStarted();
+  unlistenArxivLookupStarted = await listen<ArxivLookupStartedPayload>(
+    "ARXIV_LOOKUP_STARTED",
+    (event) => {
+      console.log("ARXIV_LOOKUP_STARTED received:", event.payload);
+      if (currentAssistantContentDiv) {
+        const existingStatus = currentAssistantContentDiv.querySelector(
+          ".arxiv-lookup-status-container",
+        );
+        if (existingStatus) existingStatus.remove();
+
+        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+        if (
+          existingDots &&
+          currentAssistantContentDiv.children.length === 1 &&
+          currentAssistantContentDiv.firstChild === existingDots
+        ) {
+          existingDots.remove();
+        }
+
+        const lookupStatusDiv = document.createElement("div");
+        lookupStatusDiv.classList.add("arxiv-lookup-status-container"); // New class
+
+        const arxivIconElement = createArxivIcon();
+        arxivIconElement.classList.add("spinning-icon");
+        lookupStatusDiv.appendChild(arxivIconElement);
+
+        const statusText = document.createElement("span");
+        statusText.textContent = `Fetching papers from ArXiv for: "${event.payload.query}"...`;
+        statusText.classList.add("arxiv-lookup-status-text"); // New class
+        lookupStatusDiv.appendChild(statusText);
+
+        currentAssistantContentDiv.insertBefore(
+          lookupStatusDiv,
+          currentAssistantContentDiv.firstChild,
+        );
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+    },
+  );
+
+  if (unlistenArxivLookupCompleted) unlistenArxivLookupCompleted();
+  unlistenArxivLookupCompleted = await listen<ArxivLookupCompletedPayload>(
+    "ARXIV_LOOKUP_COMPLETED",
+    (event) => {
+      console.log("ARXIV_LOOKUP_COMPLETED received:", event.payload);
+      if (currentAssistantContentDiv) {
+        const statusContainer = currentAssistantContentDiv.querySelector(
+          ".arxiv-lookup-status-container",
+        );
+        if (statusContainer) statusContainer.remove();
+
+        const { accordion, toggle, content } = createCustomAccordion(
+          `ArXiv Results for: "${event.payload.query}"`,
+          "arxiv-search", // New type for accordion
+        );
+
+        const arxivIconElement = createArxivIcon(); // Static icon
+        addIconToToggle(toggle, arxivIconElement);
+
+        const arxivContentDiv = content; // content is already the div we need
+        arxivContentDiv.classList.add("arxiv-content"); // Add specific class if needed for styling
+
+        if (event.payload.success && event.payload.results && event.payload.results.length > 0) {
+          event.payload.results.forEach((paper) => {
+            const paperDiv = document.createElement("div");
+            paperDiv.classList.add("arxiv-paper-summary"); // Class for individual paper
+
+            const titleEl = document.createElement("h4");
+            titleEl.textContent = paper.title;
+            paperDiv.appendChild(titleEl);
+
+            const authorsEl = document.createElement("p");
+            authorsEl.innerHTML = `<strong>Authors:</strong> ${paper.authors.join(", ")}`;
+            paperDiv.appendChild(authorsEl);
+
+            if (paper.published_date) {
+              const publishedEl = document.createElement("p");
+              publishedEl.innerHTML = `<strong>Published:</strong> ${paper.published_date}`;
+              paperDiv.appendChild(publishedEl);
+            }
+
+            const summaryEl = document.createElement("p");
+            summaryEl.classList.add("arxiv-summary-text");
+            // Truncate summary if it's too long, or provide a "show more" later
+            const summaryToShow = paper.summary;
+            summaryEl.textContent = summaryToShow;
+            paperDiv.appendChild(summaryEl);
+
+            const pdfLinkEl = document.createElement("a");
+            pdfLinkEl.href = paper.pdf_url;
+            pdfLinkEl.textContent = "View PDF on ArXiv";
+            pdfLinkEl.target = "_blank";
+            pdfLinkEl.rel = "noopener noreferrer";
+            pdfLinkEl.classList.add("arxiv-pdf-link");
+            paperDiv.appendChild(pdfLinkEl);
+
+            arxivContentDiv.appendChild(paperDiv);
+          });
+        } else {
+          const messageParagraph = document.createElement("p");
+          if (event.payload.error) {
+            console.error("ArXiv lookup failed:", event.payload.error);
+            messageParagraph.textContent = `ArXiv lookup for "${event.payload.query}" failed: ${event.payload.error}`;
+          } else {
+            messageParagraph.textContent = `No ArXiv papers found for "${event.payload.query}".`;
+          }
+          arxivContentDiv.appendChild(messageParagraph);
+          // Optionally open the accordion if there's an error or no results
+          toggle.setAttribute("aria-expanded", "true");
+          content.classList.add("open");
+        }
+
+        currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+
+        if (
+          !currentAssistantContentDiv.querySelector(".streaming-dots") &&
+          (currentAssistantContentDiv.innerHTML === "" ||
+            (currentAssistantContentDiv.children.length > 0 &&
+              currentAssistantContentDiv.querySelectorAll(
+                ":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)",
+              ).length === 0))
+        ) {
+          currentAssistantContentDiv.appendChild(getStreamingDots());
+        }
+        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+    },
+  );
+  // --- END ARXIV LOOKUP LISTENERS ---
 }
 
 // --- Function to add CSS styles for tool status containers ---
@@ -1893,20 +2073,20 @@ console.log("Frontend listener for toggle-main-window set up.");
 // Custom accordion helper functions
 function createCustomAccordion(
   title: string,
-  type: "reasoning" | "web-search",
+  type: "reasoning" | "web-search" | "arxiv-search", // ADDED "arxiv-search"
 ): { accordion: HTMLElement; toggle: HTMLButtonElement; content: HTMLElement } {
   const accordion = document.createElement("div");
-  accordion.className = type === "reasoning" ? "reasoning-accordion" : "web-search-accordion";
+  accordion.className = type === "reasoning" ? "reasoning-accordion" : "web-search-accordion"; // Keep general class for web-search style
 
   const toggle = document.createElement("button");
   toggle.className =
     type === "reasoning" ? "reasoning-accordion-toggle" : "web-search-accordion-toggle";
   toggle.setAttribute("aria-expanded", "false");
-  toggle.setAttribute("aria-controls", `${type}-content-${Date.now()}`);
+  toggle.setAttribute("aria-controls", `${type}-content-${Date.now()}`); // Use type in ID
   toggle.textContent = title;
 
   const content = document.createElement("div");
-  content.className = type === "reasoning" ? "reasoning-content" : "web-search-content";
+  content.className = type === "reasoning" ? "reasoning-content" : "web-search-content"; // Keep general class
   content.id = toggle.getAttribute("aria-controls")!;
   content.setAttribute("role", "region");
   content.setAttribute("aria-labelledby", toggle.id || "");

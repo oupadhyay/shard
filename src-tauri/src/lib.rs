@@ -21,12 +21,76 @@ use tesseract; // Uncommented
 use time::OffsetDateTime;
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
 use yahoo_finance_api as yfa; // Using an alias for brevity // For timestamp conversion
+use arxiv_tools::{Paper as ArXivPaper};// SortOrder as ArXivSortOrder};
+use urlencoding; // Added urlencoding crate for URL encoding
+use quick_xml::de::from_str;
+
+// --- ADDED: Structs for parsing ArXiv Atom XML response ---
+#[derive(Debug, Deserialize, Default)]
+struct ArxivFeed {
+    #[serde(rename = "entry", default)]
+    entries: Vec<ArxivEntry>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ArxivEntry {
+    id: Option<String>,
+    updated: Option<String>,
+    published: Option<String>,
+    title: Option<String>,
+    summary: Option<String>, // This is the abstract
+    #[serde(rename = "author", default)]
+    authors: Vec<ArxivAuthor>,
+    #[serde(rename = "link", default)]
+    links: Vec<ArxivLink>,
+    #[serde(rename = "primary_category", default)]
+    primary_category: Option<ArxivCategory>,
+    #[serde(rename = "category", default)]
+    categories: Vec<ArxivCategory>,
+    comment: Option<String>, // arxiv:comment
+    doi: Option<String>,     // arxiv:doi
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ArxivAuthor {
+    name: Option<String>,
+    // Can add affiliation if needed: #[serde(rename = "arxiv:affiliation")] affiliation: Option<String>
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ArxivLink {
+    #[serde(rename = "@href")]
+    href: Option<String>,
+    #[serde(rename = "@rel")]
+    rel: Option<String>,
+    #[serde(rename = "@title")]
+    title: Option<String>,
+    #[serde(rename = "@type")]
+    link_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ArxivCategory {
+    #[serde(rename = "@term")]
+    term: Option<String>,
+    #[serde(rename = "@scheme")]
+    scheme: Option<String>,
+}
+// --- End of ArXiv Atom XML structs ---
+
+// --- ADDED: Struct for LLM to output ArXiv search parameters ---
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct ArxivSearchParameters {
+    title: Option<String>,
+    author: Option<String>,
+    abstract_text: Option<String>,
+}
 
 // Default model if none is selected
 const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
 
 // --- System Instruction ---
-const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". Prefer bulleted lists when needed but no nested lists/sub-bullets. Use markdown formatting for code blocks and links. For math: use $$....$$ for display equations (centered, full-line) and \\(...\\) for inline math (within text). Never mix $ and $$ syntax.";
+const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax. You have perfect grammer, punctuation, and syntax.";
 
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -327,6 +391,30 @@ struct WeatherResponse {
     elevation: Option<f32>,
     current_units: Option<WeatherCurrentUnits>,
     current: Option<WeatherCurrentData>,
+}
+
+// --- ADDED: ArXiv Lookup Event Payloads ---
+#[derive(Serialize, Clone, Debug)]
+struct ArxivLookupStartedPayload {
+    query: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct ArxivLookupCompletedPayload {
+    query: String,
+    success: bool,
+    results: Option<Vec<ArxivPaperSummary>>, // Using a summarized version for the event
+    error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize for ArXivPaper
+struct ArxivPaperSummary {
+    title: String,
+    summary: String,
+    authors: Vec<String>,
+    id: String,
+    published_date: Option<String>, // Assuming ArXivPaper has a field we can format to string
+    pdf_url: String,
 }
 
 fn separate_reasoning_from_content(text: &str) -> (String, String) {
@@ -715,7 +803,11 @@ async fn geocode_location(
                     }
                 }
             } else {
-                log::error!("Geocoding: API error status {}: {}", status, response_text);
+                log::error!(
+                    "Geocoding: API error status {}: {}",
+                    status,
+                    response_text
+                );
                 Err(format!(
                     "Geocoding API error: {} - {}",
                     status, response_text
@@ -1094,6 +1186,9 @@ async fn send_text_to_model(
     // --- ADDED: Weather Lookup Logic State ---
     let mut weather_lookup_performed_successfully = false;
     let mut weather_lookup_result_text: Option<String> = None;
+    // --- ADDED: ArXiv Lookup Logic State ---
+    let mut arxiv_lookup_performed_successfully = false;
+    let mut arxiv_lookup_result_text: Option<String> = None;
 
     // Create reqwest client once
     let client = reqwest::Client::new();
@@ -1112,17 +1207,19 @@ async fn send_text_to_model(
 
                     let decider_prompt =
                         "You are an intelligent assistant that categorizes user queries to determine the best data retrieval strategy.\n".to_string() +
-                        "Analyze the user\'s query and decide if it primarily requires:\n" +
+                        "Analyze the user's query and decide if it primarily requires:\n" +
                         "1. Factual information lookup about a specific topic, person, place, or concept (e.g., definitions, history, general knowledge). If so, respond with only the exact string \"WIKIPEDIA_LOOKUP\".\n" +
                         "   Examples: \"What is photosynthesis?\", \"Tell me about the Eiffel Tower\", \"Who was Marie Curie?\"\n" +
                         "2. Current weather conditions for a specific location. If so, respond with only the exact string \"WEATHER_LOOKUP\".\n" +
                         "   Examples: \"weather in San Francisco\", \"what's the temperature in London?\", \"Is it raining in Tokyo?\"\n" +
                         "3. Specific financial market data for a publicly traded stock or symbol. If so, respond with only the exact string \"FINANCIAL_DATA\".\n" +
                         "   Examples: \"What is the stock price of GOOGL?\", \"AAPL stock quote\"\n" +
-                        "4. No external data lookup, meaning the query is conversational, a command, a creative request, or can be answered from general LLM knowledge. If so, respond with only the exact string \"NO_LOOKUP\".\n" +
+                        "4. Academic paper or research search on arXiv, potentially for summarization or specific information. If so, respond with only the exact string \"ARXIV_LOOKUP\".\n" +
+                        "   Examples: \"Find papers on diffusion models on arXiv\", \"arXiv search for 'attention is all you need' paper\", \"summarize the research paper 'Language Models are Unsupervised Multitask Learners'\", \"What are the key findings of the paper 'BERT: Pre-training of Deep Bidirectional Transformers' from arXiv?\"\n" +
+                        "5. No external data lookup, meaning the query is conversational, a command, a creative request, or can be answered from general LLM knowledge. If so, respond with only the exact string \"NO_LOOKUP\".\n" +
                         "   Examples: \"Tell me a joke.\", \"Summarize this text for me: ...\", \"What is the capital of Germany?\"\n" +
                         &format!("User query: '{}'\n", user_query) +
-                        "Based on this query, respond with one of the exact strings: \"WIKIPEDIA_LOOKUP\", \"WEATHER_LOOKUP\", \"FINANCIAL_DATA\", or \"NO_LOOKUP\".";
+                        "Based on this query, respond with one of the exact strings: \"WIKIPEDIA_LOOKUP\", \"WEATHER_LOOKUP\", \"FINANCIAL_DATA\", \"ARXIV_LOOKUP\", or \"NO_LOOKUP\".";
 
                     let decider_messages = vec![ChatMessage {
                         role: "user".to_string(),
@@ -1161,6 +1258,7 @@ async fn send_text_to_model(
                                     "WIKIPEDIA_LOOKUP",
                                     "WEATHER_LOOKUP",
                                     "FINANCIAL_DATA",
+                                    "ARXIV_LOOKUP",
                                     "NO_LOOKUP",
                                 ]
                                 .contains(&cleaned_response.as_str())
@@ -1442,6 +1540,91 @@ async fn send_text_to_model(
                                 log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (symbol extraction failure) event: {}", e);
                             }
                         }
+                    } else if decision == "ARXIV_LOOKUP" {
+                        log::info!("ArXiv lookup DECIDED for query: '{}'", user_query);
+                        if let Err(e) = window.emit(
+                            "ARXIV_LOOKUP_STARTED",
+                            ArxivLookupStartedPayload {
+                                query: user_query.to_string(),
+                            },
+                        ) {
+                            log::warn!("Failed to emit ARXIV_LOOKUP_STARTED event: {}",e);
+                        }
+
+                        // Use LLM to extract search parameters for arXiv
+                        match extract_arxiv_query_parameters(&client, user_query, &decider_gemini_api_key_string, &decider_model_name).await {
+                            Ok(arxiv_search_string) => { // MODIFIED: Now expects Ok(String)
+                                match perform_arxiv_lookup(&client, arxiv_search_string).await { // MODIFIED: Pass client and string
+                                    Ok(papers) => {
+                                        log::info!("ArXiv lookup successful for query: '{}'. Found {} papers.", user_query, papers.len());
+                                        let summaries: Vec<ArxivPaperSummary> = papers.iter().map(|p| ArxivPaperSummary {
+                                            title: p.title.clone(),
+                                            summary: p.abstract_text.clone(), // FIX: Use abstract_text
+                                            authors: p.authors.clone(),
+                                            id: p.id.clone(),
+                                            published_date: Some(p.published.clone()), // FIX: Wrap in Some()
+                                            pdf_url: format!("https://arxiv.org/pdf/{}", p.id.replace("http://arxiv.org/abs/", "")),
+                                        }).collect();
+
+                                        if let Err(e) = window.emit(
+                                            "ARXIV_LOOKUP_COMPLETED",
+                                            ArxivLookupCompletedPayload {
+                                                query: user_query.to_string(),
+                                                success: true,
+                                                results: Some(summaries.clone()),
+                                                error: None,
+                                            },
+                                        ) {
+                                            log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (success) event: {}", e);
+                                        }
+                                        let mut result_text_parts = Vec::new();
+                                        for summary in summaries.iter().take(2) { // Limit to 2 summaries for context
+                                            result_text_parts.push(format!(
+                                                "Title: {}\nAuthors: {}\nSummary: {}\nPDF: {}\n",
+                                                summary.title,
+                                                summary.authors.join(", "),
+                                                summary.summary.clone(), // Ensure no "..." here
+                                                summary.pdf_url
+                                            ));
+                                        }
+                                        arxiv_lookup_result_text = Some(format!(
+                                            "Context from ArXiv Search for user query '{}':\n\n{}",
+                                            user_query,
+                                            result_text_parts.join("\n\n")
+                                        ));
+                                        arxiv_lookup_performed_successfully = true;
+                                    }
+                                    Err(e) => {
+                                        log::error!("ArXiv lookup failed for query '{}'. Error: {}", user_query, e);
+                                        if let Err(emit_err) = window.emit(
+                                            "ARXIV_LOOKUP_COMPLETED",
+                                            ArxivLookupCompletedPayload {
+                                                query: user_query.to_string(),
+                                                success: false,
+                                                results: None,
+                                                error: Some(e.clone()),
+                                            },
+                                        ) {
+                                            log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (error) event: {}", emit_err);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => { // MODIFIED: Handle Err from extract_arxiv_query_parameters
+                                log::error!("Failed to extract ArXiv query parameters for query '{}'. Error: {}. Emitting error event.", user_query, e);
+                                 if let Err(emit_err) = window.emit(
+                                    "ARXIV_LOOKUP_COMPLETED",
+                                    ArxivLookupCompletedPayload {
+                                        query: user_query.to_string(),
+                                        success: false,
+                                        results: None,
+                                        error: Some(format!("Failed to understand search parameters: {}", e)),
+                                    },
+                                ) {
+                                    log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (param extraction error) event: {}", emit_err);
+                                }
+                            }
+                        }
                     } else {
                         // NO_LOOKUP
                         log::info!(
@@ -1459,7 +1642,7 @@ async fn send_text_to_model(
         final_messages.push(ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "Context from Wikipedia lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                "Context from Wikipedia lookup:\n{}\n\n Given this context, please answer the following user query:",
                 article_lookup_result_text.unwrap()
             ),
         });
@@ -1467,7 +1650,7 @@ async fn send_text_to_model(
         final_messages.push(ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "Context from Weather lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                "Context from Weather lookup:\n{}\n\n Given this context, please answer the following user query:",
                 weather_lookup_result_text.unwrap()
             ),
         });
@@ -1475,8 +1658,16 @@ async fn send_text_to_model(
         final_messages.push(ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "Context from Financial data lookup:\n{}\n\nGiven this context, please answer the following user query:",
+                "Context from Financial data lookup:\n{}\n\n Given this context, please answer the following user query:",
                 financial_data_result_text.unwrap()
+            ),
+        });
+    } else if arxiv_lookup_performed_successfully && arxiv_lookup_result_text.is_some() { // ADDED ArXiv
+        final_messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "Context from ArXiv Search:\n{}\n\n Please answer the following user query:",
+                arxiv_lookup_result_text.unwrap()
             ),
         });
     }
@@ -2962,4 +3153,239 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// --- ADDED: ArXiv Parameter Extractor ---
+async fn extract_arxiv_query_parameters(
+    client: &reqwest::Client,
+    user_query: &str,
+    gemini_api_key: &str,
+    model_name: &str,
+) -> Result<String, String> { // MODIFIED: Return type is now Result<String, String>
+    let prompt = format!(
+        "You are an expert at understanding user queries for searching academic papers on arXiv. \
+        Your task is to extract search terms from the user's natural language query and structure them as a JSON object. \
+        The JSON object should have the following optional fields: \"title\", \"author\", \"abstract_text\". \
+        Only include a field in the JSON if the user explicitly mentions terms for that field. \
+        If the user query is a direct paper title, primarily use the \"title\" field. \
+        If the user mentions authors, include them in the \"author\" field. \
+        If the query implies searching the abstract, use \"abstract_text\". \
+        Do not invent information. If a field is not clearly specified, omit it from the JSON. \
+        Output ONLY the JSON object. \
+        Examples: \
+        User Query: 'Papers by Hinton on neural networks' \
+        JSON Output: {{\"author\": \"Hinton\", \"title\": \"neural networks\", \"abstract_text\": \"neural networks\"}} \
+        User Query: 'attention is all you need' \
+        JSON Output: {{\"title\": \"attention is all you need\"}} \
+        User Query: 'summarize \"Softpick: No Attention Sink, No Massive Activations with Rectified Softmax\" (Zuhri et al. 2025)' \
+        JSON Output: {{\"title\": \"Softpick: No Attention Sink, No Massive Activations with Rectified Softmax\", \"author\": \"Zuhri\"}} \
+        User Query: 'any papers on diffusion models' \
+        JSON Output: {{\"title\": \"diffusion models\", \"abstract_text\": \"diffusion models\"}} \
+        \n\nUser Query: '{}'\n\nJSON Output:",
+        user_query
+    );
+
+    let extractor_messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    }];
+
+    log::info!(
+        "Requesting ArXiv query parameter extraction (as JSON) for query: '{}'",
+        user_query
+    );
+
+    match call_gemini_api_non_streaming(
+        client,
+        extractor_messages,
+        gemini_api_key,
+        model_name.to_string()
+    ).await {
+        Ok(response_str) => {
+            let json_response_str = response_str.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            log::info!("LLM suggested ArXiv parameters (JSON): {}", json_response_str);
+
+            match serde_json::from_str::<ArxivSearchParameters>(json_response_str) {
+                Ok(parsed_params) => {
+                    Ok(build_final_arxiv_search_string(parsed_params, user_query))
+                }
+                Err(e) => {
+                    log::error!("Failed to parse ArXiv parameters JSON: {}. Raw: '{}'. Falling back to original query for search string.", e, json_response_str);
+                    Ok(user_query.trim_matches(|c| c == '"' || c == '\'').to_string()) // Fallback on JSON parsing error
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Error calling ArXiv parameter extractor LLM for query '{}': {}. Falling back to original query for search string.", user_query, e);
+            Ok(user_query.trim_matches(|c| c == '"' || c == '\'').to_string()) // Fallback on LLM call error
+        }
+    }
+}
+
+// --- ADDED: Helper function to construct the final search query string for arXiv ---
+fn build_final_arxiv_search_string(
+    params: ArxivSearchParameters,
+    original_user_query: &str
+) -> String {
+    let mut query_components: Vec<String> = Vec::new();
+
+    // Handle title: unfielded, unquoted
+    if let Some(title_str) = &params.title {
+        // Use the trim_matches logic that was already added by the user
+        let cleaned_title = title_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        if !cleaned_title.is_empty() {
+            query_components.push(cleaned_title);
+        }
+    }
+
+    // Handle author: fielded, potentially quoted for phrases
+    if let Some(author_str) = &params.author {
+        let cleaned_author = author_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        if !cleaned_author.is_empty() {
+            // arXiv API au: field. Quotes for exact phrase if space is present.
+            let author_query_part = if cleaned_author.contains(char::is_whitespace) {
+                format!("au:\"{}\"", cleaned_author)
+            } else {
+                format!("au:{}", cleaned_author)
+            };
+            query_components.push(author_query_part);
+        }
+    }
+
+    // Handle abstract: fielded, quoted for phrases
+    if let Some(abstract_str) = &params.abstract_text {
+        let cleaned_abstract = abstract_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        if !cleaned_abstract.is_empty() {
+            query_components.push(format!("abs:\"{}\"", cleaned_abstract));
+        }
+    }
+
+    if query_components.is_empty() {
+        log::info!("No specific ArXiv parameters extracted, using original query for unfielded search: '{}'", original_user_query);
+        return original_user_query.trim_matches(|c| c == '"' || c == '\'').to_string();
+    }
+
+    let final_query = query_components.join(" AND ");
+    log::info!("Constructed final ArXiv search query string: \"{}\"", final_query);
+    final_query
+}
+
+// --- ADDED: ArXiv Lookup Function ---
+async fn perform_arxiv_lookup(
+    client: &reqwest::Client, // ADDED: client parameter
+    search_query_string: String, // MODIFIED: Now accepts the raw query string
+) -> Result<Vec<ArXivPaper>, String> {
+    log::info!("Performing ArXiv lookup with raw query string: '{}'", search_query_string);
+
+    let max_results = 2;
+    let base_url = "http://export.arxiv.org/api/query";
+
+    // URL encode the search_query_string. The `urlencoding` crate might be useful if not already a direct dependency,
+    // but reqwest might handle this sufficiently with .query(). For direct construction, it's safer.
+    let encoded_query = urlencoding::encode(&search_query_string);
+
+    let request_url = format!(
+        "{}?search_query={}&start=0&max_results={}",
+        base_url,
+        encoded_query,
+        max_results
+    );
+
+    log::info!("Constructed ArXiv API request URL: {}", request_url);
+
+    match client.get(&request_url).send().await {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                match response.text().await {
+                    Ok(xml_text) => {
+                        log::info!("Successfully fetched ArXiv XML response. Length: {}", xml_text.len());
+                        // log::debug!("ArXiv XML Response:\n{}", xml_text); // Keep this commented for now unless debugging specific XML issues
+
+                        match from_str::<ArxivFeed>(&xml_text) {
+                            Ok(feed) => {
+                                let mut papers: Vec<ArXivPaper> = Vec::new();
+                                for entry in feed.entries {
+                                    let paper_id = entry.id.unwrap_or_default();
+                                    let title = entry.title.unwrap_or_default();
+                                    let abstract_text = entry.summary.unwrap_or_default(); // 'summary' in Atom is the abstract
+                                    let published = entry.published.unwrap_or_default();
+                                    let updated = entry.updated.unwrap_or_default();
+                                    let comments = entry.comment;
+                                    let doi = entry.doi;
+
+                                    let authors: Vec<String> = entry.authors.into_iter()
+                                        .filter_map(|auth| auth.name)
+                                        .collect();
+
+                                    let mut pdf_url_option: Option<String> = None;
+                                    for link in entry.links {
+                                        // MODIFIED: Clone link.href for the first check to avoid move issues
+                                        if let (Some(href), Some(title_attr)) = (link.href.clone(), link.title) {
+                                            if title_attr == "pdf" {
+                                                pdf_url_option = Some(href);
+                                                break;
+                                            }
+                                        }
+                                        // Fallback if title attribute is not present but rel="alternate" and type="application/pdf"
+                                        // No change needed here as link.href was already being cloned for this path if the first path wasn't taken.
+                                        // However, if the first path IS taken, link.href would have been moved if not for the clone above.
+                                        else if let (Some(href), Some(rel_attr), Some(type_attr)) = (link.href.clone(), link.rel, link.link_type) {
+                                            if rel_attr == "alternate" && type_attr == "application/pdf" {
+                                                pdf_url_option = Some(href);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    let pdf_url = pdf_url_option.unwrap_or_else(|| format!("http://arxiv.org/pdf/{}", paper_id.split('/').last().unwrap_or_default()));
+
+                                    let categories: Vec<String> = entry.categories.into_iter()
+                                        .filter_map(|cat| cat.term)
+                                        .collect();
+
+                                    let primary_category = entry.primary_category.and_then(|pc| pc.term);
+
+                                    // Note: arxiv_tools::Paper has more fields like `journal_ref`, `links` (which is a specific struct in arxiv_tools not just a string list).
+                                    // We are populating the core ones. `links` in ArXivPaper is more for related links, not just the PDF.
+                                    // `journal_ref` is not directly available in the standard Atom entry without specific arxiv: namespace parsing for it.
+                                    papers.push(ArXivPaper {
+                                        id: paper_id,
+                                        title,
+                                        authors,
+                                        abstract_text,
+                                        categories,
+                                        comment: comments.map_or_else(Vec::new, |c| vec![c]), // MODIFIED: Convert Option<String> to Vec<String>
+                                        doi: doi.unwrap_or_default(),
+                                        journal_ref: String::new(),
+                                        pdf_url,
+                                        published,
+                                        updated,
+                                        primary_category: primary_category.unwrap_or_default(), // ArxivPaper expects String, not Option<String>
+                                    });
+                                }
+                                log::info!("Parsed {} papers from ArXiv XML feed.", papers.len());
+                                Ok(papers)
+                            }
+                            Err(e) => {
+                                log::error!("Failed to parse ArXiv XML: {}. XML was: {:.500}", e, xml_text);
+                                Err(format!("Failed to parse ArXiv XML: {}", e))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to read ArXiv response text: {}", e);
+                        Err(format!("Failed to read ArXiv response text: {}", e))
+                    }
+                }
+            } else {
+                let error_text = response.text().await.unwrap_or_else(|_| "Could not read error body from ArXiv".to_string());
+                log::error!("ArXiv API request failed with status {}: {}", status, error_text);
+                Err(format!("ArXiv API request failed: {} - {}", status, error_text))
+            }
+        }
+        Err(e) => {
+            log::error!("Network request to ArXiv API failed: {}", e);
+            Err(format!("ArXiv API network request failed: {}", e))
+        }
+    }
 }

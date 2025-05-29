@@ -16,6 +16,7 @@ A Tauri application for easy interaction with AI models.
 *   Weather Data from Open-Meteo
 *   General Data from Wikipedia
 *   Wikipedia Research Loop (up to 4 searches)
+*   Research Paper Data from ArXiv
 
 ### In Progress Features
 

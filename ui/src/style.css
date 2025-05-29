@@ -858,6 +858,8 @@ body.fade-out {
     padding: 5px 0; /* Some vertical padding */
     font-style: italic;
     color: var(--text-secondary-color); /* Or your preferred color */
+    background-color: transparent;
+    border-radius: 8px;
 }
 
 .financial-data-status-text {
@@ -982,4 +984,105 @@ body.fade-out {
     list-style: none; /* Remove default marker */
     position: relative;
     padding-left: 4px;
+}
+
+/* Styles for ArXiv Icon (using lucide-book as base) */
+.lucide-book-icon {
+    min-width: 18px !important;
+    height: 18px;
+}
+
+/* Specific adjustments for the spinning icon within the status container */
+.arxiv-lookup-status-container .spinning-icon.lucide-book-icon {
+    min-width: 18px;
+    height: 18px;
+}
+
+/* Styles for ArXiv search accordion content */
+.web-search-content.arxiv-content {
+    /* Similar to other search content, can be adjusted */
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
+}
+
+.arxiv-paper-summary {
+    margin-bottom: 15px; /* Space between paper entries */
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08); /* Separator for papers */
+}
+
+.arxiv-paper-summary:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.arxiv-paper-summary h4 {
+    font-size: 1em;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 4px;
+}
+
+.arxiv-paper-summary p {
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.75);
+    margin-bottom: 6px;
+    line-height: 1.5;
+}
+
+.arxiv-paper-summary p strong {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.arxiv-summary-text {
+    /* Specific styling for the abstract summary if needed */
+}
+
+.arxiv-pdf-link {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.9em;
+    color: #007aff; /* Standard link color */
+    text-decoration: none;
+}
+
+.arxiv-pdf-link:hover {
+    text-decoration: underline;
+}
+
+/* Add custom triangle marker for web search accordion */
+.web-search-accordion-toggle {
+    list-style: none; /* Remove default marker */
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    padding-left: 4px;
+}
+
+.weather-lookup-status-container,
+.financial-data-status-container,
+.arxiv-lookup-status-container { /* ADDED for ArXiv */
+  background-color: transparent;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  display: flex; /* Ensures icon and text are in a row */
+  align-items: center; /* Vertically aligns icon and text */
+  padding-left: 4px;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.article-lookup-status-text,
+.weather-lookup-status-text,
+.financial-data-status-text,
+.arxiv-lookup-status-text { /* ADDED for ArXiv */
+  font-size: 0.9em;
+  flex-grow: 1; /* Allows text to take available space */
+  line-height: 1.3; /* Adjust for better text flow if it wraps */
+  /* Potentially add a max-width if you want to control wrapping more explicitly, */
+  /* but flex-grow should handle it within the container. */
 }

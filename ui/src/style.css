@@ -234,7 +234,7 @@ body {
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
-    background-color: rgba(60, 60, 60, 0.9); /* Move bg color here */
+    background-color: rgba(60, 60, 60, 0.95); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
     padding: 5px 5px 5px 8px; /* Adjust padding T/R/B/L */
 }
@@ -709,8 +709,8 @@ body {
     display: flex;
     align-items: center; /* Align items vertically */
     gap: 10px;
-    padding: 8px; /* Slightly reduce padding */
-    background-color: rgba(45, 45, 45, 0.8);
+    padding: 4px; /* Slightly reduce padding */
+    background-color: rgba(45, 45, 45, 1.0);
     border-radius: 25px;
     margin-top: auto;
     backdrop-filter: blur(10px);

@@ -73,8 +73,6 @@ struct ArxivLink {
 struct ArxivCategory {
     #[serde(rename = "@term")]
     term: Option<String>,
-    #[serde(rename = "@scheme")]
-    scheme: Option<String>,
 }
 // --- End of ArXiv Atom XML structs ---
 
@@ -245,11 +243,6 @@ struct StreamingChatCompletionResponse {
     created: i64,
     model: String,
     choices: Vec<StreamChoice>,
-}
-
-#[derive(Serialize, Clone)] // ADDED - Payload for STREAM_CHUNK event
-struct StreamChunkPayload {
-    delta: Option<String>,
 }
 
 #[derive(Serialize, Clone)] // ADDED - Payload for STREAM_END event

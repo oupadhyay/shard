@@ -497,14 +497,14 @@ fn separate_reasoning_from_content(text: &str) -> (String, String) {
     // Add the final section
     if !current_section.trim().is_empty() {
         if is_reasoning_section {
-            reasoning_parts.push(current_section.trim().to_string());
+            reasoning_parts.push(current_section.to_string());
         } else {
-            content_parts.push(current_section.trim().to_string());
+            content_parts.push(current_section.to_string());
         }
     }
 
     // Join parts with proper spacing
-    let content = content_parts.join("\n\n").trim().to_string();
+    let content = content_parts.join("\n\n").to_string();
     let mut reasoning = reasoning_parts.join("\n\n").trim().to_string();
 
     // Convert **Header** patterns to proper markdown headers with spacing
@@ -1770,7 +1770,8 @@ async fn get_selected_model(app_handle: AppHandle) -> Result<String, String> {
 async fn set_selected_model(model_name: String, app_handle: AppHandle) -> Result<(), String> {
     let allowed_models = vec![
         "deepseek/deepseek-chat-v3-0324:free",
-        "deepseek/deepseek-r1:free",
+        // "deepseek/deepseek-r1:free",
+        "deepseek/deepseek-r1-0528:free",
         "gemini-2.0-flash", // Keep this for potential direct use or alias
         "gemini-2.5-flash-preview-05-20", // This is the "Gemini 2.5 Flash (non-thinking)"
         "gemini-2.5-flash-preview-05-20#thinking-enabled",
@@ -1931,7 +1932,7 @@ async fn call_gemini_api(
                                         let line = line_buffer
                                             .drain(..newline_pos + 1)
                                             .collect::<String>();
-                                        let trimmed_line = line.trim();
+                                        let trimmed_line = line;
 
                                         if trimmed_line.starts_with("data: ") {
                                             let data_json_str = &trimmed_line[6..]; // Skip "data: "
@@ -2173,7 +2174,7 @@ async fn call_openrouter_api(
                                                     if accumulated_reasoning.is_empty() {
                                                         None
                                                     } else {
-                                                        Some(accumulated_reasoning)
+                                                        Some(accumulated_reasoning.clone()) // Clone here
                                                     };
                                                 let _ = window.emit(
                                                     "STREAM_END",
@@ -2193,23 +2194,19 @@ async fn call_openrouter_api(
                                                     if let Some(choice) =
                                                         parsed_chunk.choices.get(0)
                                                     {
+                                                        let mut content_delta_to_emit: Option<String> = None;
+                                                        let mut reasoning_delta_to_emit: Option<String> = None;
+
                                                         if let Some(content_delta) =
                                                             &choice.delta.content
                                                         {
-                                                            accumulated_content
-                                                                .push_str(content_delta);
-                                                            if let Err(e) = window.emit(
-                                                                "STREAM_CHUNK",
-                                                                StreamChunkPayload {
-                                                                    delta: Some(
-                                                                        content_delta.clone(),
-                                                                    ),
-                                                                },
-                                                            ) {
-                                                                log::error!("Failed to emit STREAM_CHUNK: {}", e);
+                                                            if !content_delta.is_empty() {
+                                                                accumulated_content
+                                                                    .push_str(content_delta);
+                                                                content_delta_to_emit = Some(content_delta.clone());
                                                             }
                                                         }
-                                                        // Capture reasoning delta if present
+
                                                         if let Some(reasoning_delta) =
                                                             &choice.delta.reasoning
                                                         {
@@ -2217,6 +2214,21 @@ async fn call_openrouter_api(
                                                                 log::debug!("Received reasoning delta for OpenRouter: '{}'", reasoning_delta);
                                                                 accumulated_reasoning
                                                                     .push_str(reasoning_delta);
+                                                                reasoning_delta_to_emit = Some(reasoning_delta.clone());
+                                                            }
+                                                        }
+
+                                                        // Emit StreamChoiceDelta if there's either content or reasoning
+                                                        if content_delta_to_emit.is_some() || reasoning_delta_to_emit.is_some() {
+                                                            if let Err(e) = window.emit(
+                                                                "STREAM_CHUNK",
+                                                                StreamChoiceDelta { // MODIFIED to StreamChoiceDelta
+                                                                    content: content_delta_to_emit,
+                                                                    role: choice.delta.role.clone().or_else(|| Some("assistant".to_string())), // Populate role
+                                                                    reasoning: reasoning_delta_to_emit,
+                                                                },
+                                                            ) {
+                                                                log::error!("Failed to emit STREAM_CHUNK (StreamChoiceDelta): {}", e);
                                                             }
                                                         }
                                                     }
@@ -2268,6 +2280,20 @@ async fn call_openrouter_api(
                 // If loop finishes without [DONE], it might be an incomplete stream or an issue.
                 // Emit an error or handle as appropriate. For now, assume [DONE] is the primary exit.
                 log::warn!("OpenRouter stream ended without [DONE] marker.");
+                // Ensure final accumulated reasoning is included if the stream ends abruptly
+                let final_reasoning_abrupt = if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning)
+                };
+                let _ = window.emit(
+                    "STREAM_END", // Emit STREAM_END even on abrupt finish, possibly with partial content
+                    StreamEndPayload {
+                        full_content: accumulated_content, // Send whatever content was accumulated
+                        reasoning: final_reasoning_abrupt,
+                    },
+                );
+                // Then emit the error
                 let _ = window.emit(
                     "STREAM_ERROR",
                     StreamErrorPayload {

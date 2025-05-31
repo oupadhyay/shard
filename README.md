@@ -1,6 +1,8 @@
 # Shard
 
-A Tauri application for easy interaction with AI models.
+A Tauri application for easy interaction with AI models. 
+
+**Note:** Cmd (⌘) + Shift + Z is the shortcut to toggle visibility of Shard
 
 ## Features
 
@@ -22,6 +24,7 @@ A Tauri application for easy interaction with AI models.
 
 *   YT Video Summarization (Idea 0.5.X 💡)
 *   Custom System Prompt (Idea 0.5.X 💡)
+*   Custom Keyboard Shortcut
 
 Feel free to add more ideas in the Issues or contribute to the project with a PR!
 

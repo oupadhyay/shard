@@ -51,8 +51,7 @@ if (settingsPanel) {
   });
 }
 
-const messageInput = document.getElementById("message-input") as HTMLTextAreaElement;
-const inputImagePreview = document.getElementById("input-image-preview") as HTMLImageElement;
+const messageInput = document.getElementById("message-input") as HTMLDivElement; // MODIFIED: HTMLDivElement
 const chatHistory = document.getElementById("chat-history") as HTMLDivElement;
 const ocrIconContainer = document.getElementById("ocr-icon-container") as HTMLDivElement;
 const statusMessage = document.getElementById("status-message") as HTMLParagraphElement;
@@ -83,7 +82,7 @@ interface ChatMessage {
 }
 
 // --- System Instruction (matches backend) ---
-const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are business casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax. You have perfect grammer, punctuation, and syntax.`;
+const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.`;
 
 // --- Constants for History Management ---
 const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
@@ -98,6 +97,7 @@ function getWordCount(text: string): number {
 let chatMessageHistory: ChatMessage[] = [];
 let currentOcrText: string | null = null;
 let currentImageBase64: string | null = null;
+let currentImageMimeType: string | null = null; // ADDED
 let currentTempScreenshotPath: string | null = null;
 let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold the div of the assistant's message being streamed
 let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
@@ -118,6 +118,14 @@ function preprocessLatex(content: string): string {
   // Replace \[ ... \] with $$ ... $$
   content = content.replace(/\\\[/g, "$$");
   content = content.replace(/\\\]/g, "$$");
+
+  // Remove newlines within $$ ... $$ blocks, replacing them with a space
+  content = content.replace(/\$\$(.*?)\$\$/gs, (_, innerContent) => {
+    // Replace one or more newline characters (Unix, Windows, old Mac) with a single space
+    const cleanedInnerContent = innerContent.replace(/[\n\r]+/g, ' ');
+    return `$$${cleanedInnerContent}$$`;
+  });
+
   return content;
 }
 
@@ -300,17 +308,6 @@ async function loadInitialSettings() {
   }
 }
 
-// --- Helper to auto-resize textarea ---
-const initialTextareaHeight = "20px";
-function autoResizeTextarea() {
-  if (!messageInput) return;
-  messageInput.style.height = "auto";
-  const newHeight = Math.min(messageInput.scrollHeight, 200);
-  messageInput.style.height = `${newHeight}px`;
-  messageInput.style.overflowY = newHeight >= 200 ? "auto" : "hidden";
-  updateInputAreaLayout(); // ADDED: Update layout after resize
-}
-
 // --- ADDED: Function to adjust layout based on input area height ---
 function updateInputAreaLayout() {
   const inputArea = document.getElementById("input-area");
@@ -485,47 +482,24 @@ async function addMessageToHistory(
   chatHistory.scrollTop = chatHistory.scrollHeight; // Auto-scroll to bottom
 }
 
-// --- Helper to update Input Preview and Tooltip ---
-function updateInputAreaForCapture() {
-  if (currentOcrText) {
-    messageInput.title = currentOcrText; // Set tooltip on input
-  } else {
-    messageInput.title = ""; // Clear tooltip
-  }
-
-  if (currentImageBase64) {
-    // Create a temporary image to get natural dimensions
-    const tempImg = new Image();
-    tempImg.onload = () => {
-      // Calculate appropriate display dimensions
-      const maxWidth = 120;
-      const maxHeight = 80;
-      const naturalWidth = tempImg.naturalWidth;
-      const naturalHeight = tempImg.naturalHeight;
-
-      // Calculate scale to fit within max dimensions while maintaining aspect ratio
-      const scaleX = maxWidth / naturalWidth;
-      const scaleY = maxHeight / naturalHeight;
-      const scale = Math.min(scaleX, scaleY, 1); // Don't scale up
-
-      const displayWidth = Math.round(naturalWidth * scale);
-      const displayHeight = Math.round(naturalHeight * scale);
-
-      // Apply calculated dimensions to the preview
-      inputImagePreview.style.width = `${displayWidth}px`;
-      inputImagePreview.style.height = `${displayHeight}px`;
-    };
-
-    inputImagePreview.src = `data:image/png;base64,${currentImageBase64}`;
-    inputImagePreview.classList.remove("hidden");
-    tempImg.src = `data:image/png;base64,${currentImageBase64}`;
-  } else {
-    inputImagePreview.src = "";
-    inputImagePreview.classList.add("hidden");
-    // Reset dimensions
-    inputImagePreview.style.width = "";
-    inputImagePreview.style.height = "";
-  }
+// --- Helper to get clean text from contenteditable div ---
+function getTextFromContentEditable(div: HTMLDivElement): string {
+  let text = "";
+  div.childNodes.forEach(node => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      // Skip our image wrapper, recurse for other elements like <div> or <p> from paste
+      if (!(node as HTMLElement).classList?.contains("inline-image-wrapper")) {
+        // Basic handling for block elements to add a newline, might need refinement
+        if (['DIV', 'P', 'BR'].includes((node as HTMLElement).tagName)) {
+          if (text.length > 0 && !text.endsWith('\\n')) text += '\\n'; // Add newline if not already there
+        }
+        text += getTextFromContentEditable(node as HTMLDivElement); // Recurse
+      }
+    }
+  });
+  return text.trim();
 }
 
 // --- Clear Chat Handler ---
@@ -545,14 +519,17 @@ async function clearChatHistory() {
 
     if (currentTempScreenshotPath) {
       console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
-      invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath })
-        .then(() => console.log("Temp screenshot cleanup successful."))
-        .catch((err) => console.error("Error cleaning up temp screenshot:", err));
+      try {
+        await invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath });
+        console.log("Temp screenshot cleanup successful via clearInlineImageAndData.");
+      } catch (err) {
+        console.error("Error cleaning up temp screenshot via clearInlineImageAndData:", err);
+      }
     }
     currentOcrText = null;
     currentImageBase64 = null;
     currentTempScreenshotPath = null;
-    updateInputAreaForCapture();
+    await clearInlineImageAndData(); // Use the new function to clear image if present
 
     if (statusMessage) statusMessage.textContent = "";
 
@@ -567,6 +544,49 @@ async function clearChatHistory() {
   }, FADE_DURATION);
 }
 
+// --- ADDED: New function to clear inline image and associated data ---
+async function clearInlineImageAndData() {
+  console.log("clearInlineImageAndData called");
+  const imageWrapper = messageInput.querySelector(".inline-image-wrapper");
+  if (imageWrapper) {
+    imageWrapper.remove();
+  }
+
+  if (currentTempScreenshotPath) {
+    console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
+    try {
+      await invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath });
+      console.log("Temp screenshot cleanup successful via clearInlineImageAndData.");
+    } catch (err) {
+      console.error("Error cleaning up temp screenshot via clearInlineImageAndData:", err);
+    }
+  }
+
+  currentImageBase64 = null;
+  currentImageMimeType = null;
+  currentOcrText = null;
+  currentTempScreenshotPath = null;
+  messageInput.title = ""; // Clear tooltip
+
+  // Ensure the input area is focused after clearing
+  messageInput.focus();
+  updatePlaceholderState(); // ADDED: Update placeholder
+  updateInputAreaLayout(); // Update layout in case height changed
+}
+
+// --- ADDED: Function to update placeholder visibility ---
+function updatePlaceholderState() {
+  if (!messageInput) return;
+  const textContent = messageInput.textContent?.trim() || "";
+  const hasImage = messageInput.querySelector(".inline-image-wrapper");
+
+  if (textContent === "" && !hasImage) {
+    messageInput.classList.add("placeholder-active");
+  } else {
+    messageInput.classList.remove("placeholder-active");
+  }
+}
+
 // --- Capture OCR Handler ---
 async function handleCaptureOcr() {
   console.log("Capture OCR initiated");
@@ -575,16 +595,7 @@ async function handleCaptureOcr() {
     statusMessage.style.display = "block";
   }
   // Clear previous capture state *before* starting new capture
-  if (currentTempScreenshotPath) {
-    console.log("Cleaning up previous temp screenshot:", currentTempScreenshotPath);
-    await invoke("cleanup_temp_screenshot", { path: currentTempScreenshotPath }).catch((err) =>
-      console.error("Error cleaning up previous temp screenshot:", err),
-    );
-    currentTempScreenshotPath = null; // Ensure path is cleared even if cleanup fails
-  }
-  currentOcrText = null;
-  currentImageBase64 = null;
-  updateInputAreaForCapture();
+  await clearInlineImageAndData(); // Use new function to clear any existing inline image and data
 
   // Visually indicate loading
   if (ocrIconContainer) ocrIconContainer.style.opacity = "0.5";
@@ -593,21 +604,96 @@ async function handleCaptureOcr() {
     const result = await core.invoke<CaptureResult>("capture_interactive_and_ocr");
     console.log("Capture Result:", result);
 
-    currentOcrText = result.ocr_text;
-    currentImageBase64 = result.image_base64;
-    currentTempScreenshotPath = result.temp_path;
+    if (result.image_base64) {
+      currentImageBase64 = result.image_base64;
+      currentImageMimeType = "image/png"; // Assuming PNG from backend for now, or get from result if available
+      currentOcrText = result.ocr_text; // OCR text is still stored
+      currentTempScreenshotPath = result.temp_path;
 
-    updateInputAreaForCapture(); // Update input tooltip and image preview
+      // Preserve existing text before adding the image
+      const existingText = getTextFromContentEditable(messageInput).trim();
+      messageInput.innerHTML = ""; // Clear the input field to rebuild
+
+      if (existingText) {
+        // Re-add the text. We might need to handle line breaks more explicitly if they were divs/brs
+        // For now, let's assume textContent captured the essence.
+        // A more robust way might involve iterating childNodes and rebuilding.
+        const textNode = document.createTextNode(existingText + " "); // Add a space before the image
+        messageInput.appendChild(textNode);
+      }
+
+      // Create inline image structure
+      const wrapper = document.createElement("span");
+      wrapper.className = "inline-image-wrapper";
+      wrapper.contentEditable = "false"; // Make the wrapper non-editable
+
+      const img = document.createElement("img");
+      img.src = `data:${currentImageMimeType};base64,${currentImageBase64}`;
+      img.alt = "Captured image";
+      // Add data attributes if needed for other purposes, e.g., temp path
+      if (currentTempScreenshotPath) {
+        img.setAttribute("data-temp-path", currentTempScreenshotPath);
+      }
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "delete-inline-image-btn";
+      deleteBtn.innerHTML = "&times;"; // '×' character
+      deleteBtn.title = "Remove image";
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation(); // Prevent triggering other input events
+        await clearInlineImageAndData();
+      });
+
+      wrapper.appendChild(img);
+      wrapper.appendChild(deleteBtn);
+      messageInput.appendChild(wrapper);
+
+      // Add a non-breaking space after the image to allow typing after it
+      // Or set focus appropriately. For now, let's just append.
+      // The user can click after the image to type.
+      // Or, better, programmatically set the selection:
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.setStartAfter(wrapper);
+      range.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+
+      updatePlaceholderState(); // ADDED: Update placeholder after adding image
+
+      if (currentOcrText) {
+        messageInput.title = currentOcrText; // Set tooltip
+      }
+    } else if (result.ocr_text) {
+      // No image, but OCR text is present. Append it or replace if input is empty.
+      const existingText = getTextFromContentEditable(messageInput).trim();
+      if (existingText) {
+        messageInput.textContent = existingText + "\n" + result.ocr_text; // Append with a newline
+      } else {
+        messageInput.textContent = result.ocr_text; // Replace if empty
+      }
+      currentOcrText = result.ocr_text;
+      messageInput.title = currentOcrText;
+      // Place cursor at the end of the text
+      const range = document.createRange();
+      const sel = window.getSelection();
+      if (messageInput.lastChild) {
+        range.setStartAfter(messageInput.lastChild);
+      } else {
+        range.selectNodeContents(messageInput);
+        range.collapse(false);
+      }
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+
+      updatePlaceholderState(); // ADDED: Update placeholder after adding OCR text
+    }
 
     if (statusMessage) {
-      if (currentOcrText || currentImageBase64) {
-        statusMessage.textContent = "Capture complete. OCR text added as tooltip to input.";
-        // Auto-hide status after a delay
+      if (currentImageBase64 || currentOcrText) {
+        statusMessage.textContent = currentImageBase64 ? "Image captured." : "OCR text captured.";
         setTimeout(() => {
-          if (
-            statusMessage &&
-            statusMessage.textContent === "Capture complete. OCR text added as tooltip to input."
-          ) {
+          if (statusMessage && (statusMessage.textContent === "Image captured." || statusMessage.textContent === "OCR text captured.")) {
             statusMessage.style.display = "none";
             statusMessage.textContent = "";
           }
@@ -619,15 +705,10 @@ async function handleCaptureOcr() {
   } catch (error) {
     console.error("Error during interactive capture/OCR:", error);
     const errorMessage = typeof error === "string" ? error : "Capture cancelled or failed.";
-    // Clear any potentially partially set state
-    currentOcrText = null;
-    currentImageBase64 = null;
-    currentTempScreenshotPath = null; // Ensure path isn't left hanging on error
-    updateInputAreaForCapture();
+    await clearInlineImageAndData(); // Clear any partial state on error
 
     if (statusMessage) {
       statusMessage.textContent = `Error: ${errorMessage}`;
-      // Auto-hide error after a delay
       setTimeout(() => {
         if (statusMessage && statusMessage.textContent === `Error: ${errorMessage}`) {
           statusMessage.style.display = "none";
@@ -636,15 +717,14 @@ async function handleCaptureOcr() {
       }, 5000);
     }
   } finally {
-    updateInputAreaLayout(); // ADDED: Ensure layout is correct after input clear/reset
-    updateInputAreaForCapture();
+    updateInputAreaLayout();
     if (ocrIconContainer) ocrIconContainer.style.opacity = "1.0";
+    messageInput.focus();
   }
 }
 
 // --- Send Message Handler ---
 async function handleSendMessage() {
-  // If AI is currently responding, finalize the current response before proceeding
   if (isAIResponding) {
     console.log(
       "handleSendMessage: AI is responding. Finalizing current response before interjection.",
@@ -652,61 +732,31 @@ async function handleSendMessage() {
     finalizeCurrentResponse();
   }
 
-  let userTypedText = messageInput.value.trim();
-  // let textToSend: string | null;
+  const userTypedText = getTextFromContentEditable(messageInput);
   let textToDisplay = userTypedText;
-  let tempPathToClean: string | null = null; // Hold path for cleanup *after* sending
-  let tempOcrText: string | null = null; // Hold OCR text for accordion *before* clearing
   let imagePayloadForMessage: { base64: string; mime: string } | null = null;
+  let tempOcrTextForAccordion: string | null = currentOcrText;
 
-  // Check if there's captured OCR text to prepend
-  if (currentOcrText) {
-    // const formattedOcr = `\n OCR Text: ${currentOcrText}`;
-    // textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
-    // For display, show only user text or a placeholder if only OCR
-    textToDisplay = userTypedText || "[Screenshot captured]";
-    if (currentImageBase64) { // Ensure we have image data to send
-      imagePayloadForMessage = { base64: currentImageBase64, mime: "image/png" }; // Assuming PNG
+  if (currentImageBase64 && currentImageMimeType) {
+    imagePayloadForMessage = { base64: currentImageBase64, mime: currentImageMimeType };
+    if (!userTypedText) {
+      textToDisplay = "[Image sent]";
     }
-
-    // Store OCR text before clearing for accordion creation
-    tempOcrText = currentOcrText;
-
-    // Prepare state to be cleared AFTER successful send
-    tempPathToClean = currentTempScreenshotPath;
-    currentOcrText = null;
-    currentImageBase64 = null;
-    currentTempScreenshotPath = null;
-    // updateInputAreaForCapture(); // Clear preview/tooltip *after* send succeeds or fails
   } else if (!userTypedText) {
-    console.log("handleSendMessage: No text typed and no captured OCR text.");
-    return; // Nothing to send
+    console.log("handleSendMessage: No text typed and no image.");
+    return;
   }
 
-  // Add user's current message to history right before sending
-  // This was previously done in addMessageToHistory, but to ensure the API call
-  // gets the absolute latest state including the current message, we adjust.
-  // However, addMessageToHistory ALREADY adds the user message to the visual chat
-  // and to chatMessageHistory. So, the history is up-to-date.
 
-  addMessageToHistory("You", textToDisplay, null, tempOcrText, imagePayloadForMessage); // Pass image data
+  addMessageToHistory("You", textToDisplay, null, tempOcrTextForAccordion, imagePayloadForMessage);
 
-  // Optimistically resize window to maximum height expecting a potentially long response
+  const messagesToSendToBackend = [...chatMessageHistory];
 
-  // Prepare messages for the backend
-  // The 'textToDisplay' is the most recent user message.
-  // chatMessageHistory already contains all prior messages, including the one just added by addMessageToHistory.
-  const messagesToSendToBackend = [...chatMessageHistory]; // MODIFIED: Use the updated chatMessageHistory
-
-  messageInput.value = ""; // Clear input field now
-  // messageInput.disabled = true; // MODIFIED: Allow typing while AI responds
-  if (messageInput.title) messageInput.title = ""; // Clear tooltip immediately
-  messageInput.style.height = initialTextareaHeight; // Reset height
-  messageInput.style.overflowY = "hidden"; // Hide scrollbar again
-  if (!inputImagePreview.classList.contains("hidden")) {
-    inputImagePreview.classList.add("hidden"); // Hide preview immediately
-    inputImagePreview.src = "";
-  }
+  await clearInlineImageAndData();
+  messageInput.innerHTML = "";
+  messageInput.title = "";
+  messageInput.contentEditable = "false"; // ADDED: Disable input during AI response
+  updatePlaceholderState();
 
   // Show clear button if it was hidden
   if (clearChatButton?.classList.contains("hidden")) {
@@ -776,51 +826,39 @@ async function handleSendMessage() {
     // Invoke send_text_to_model. It no longer directly returns the message content.
     await core.invoke("send_text_to_model", {
       messages: messagesToSendToBackend,
-      window: Window.getCurrent(),
-    }); // Pass the current window
+      window: Window.getCurrent(), // Pass the current window
+      // ADDED: Pass the current image data if available, even if also in messages.
+      // The backend can decide how to use it (e.g., for Gemini File API vs inline base64).
+      // This simplifies frontend logic slightly. The backend's ChatMessage struct
+      // already supports image_base64_data and image_mime_type.
+      // The send_text_to_model will primarily look at the messages array.
+      // The crucial part is that chatMessageHistory entries for "user" type
+      // (created by addMessageToHistory) should contain the image data
+      // if an image was present for that user message.
+    });
     console.log("send_text_to_model invoked. Waiting for stream events.");
 
     // The rest of the logic (removeThinkingIndicator, addMessageToHistory for Shard)
     // will now be handled by the STREAM_CHUNK, STREAM_END, and STREAM_ERROR event listeners.
 
-    // Cleanup temp file ONLY after successful command invocation (actual success is via stream)
-    if (tempPathToClean) {
-      console.log(
-        "Cleaning up temp screenshot after invoking send_text_to_model:",
-        tempPathToClean,
-      );
-      invoke("cleanup_temp_screenshot", { path: tempPathToClean }).catch((err) =>
-        console.error("Error cleaning up temp screenshot post-invoke:", err),
-      );
-    }
   } catch (error) {
-    // This catch block handles errors from the invoke call itself (e.g., backend not reachable)
-    // Errors from the model generation will be handled by STREAM_ERROR listener.
     console.error("Failed to invoke send_text_to_model:", error);
     if (currentAssistantContentDiv) {
       currentAssistantContentDiv.innerHTML = md.render(
         preprocessLatex(`Error invoking model: ${error}`),
       );
     } else {
-      // If even the placeholder wasn't created, add a new error message
       addMessageToHistory("Shard", `Error invoking model: ${error}`);
     }
     if (currentAssistantMessageDiv) {
-      currentAssistantMessageDiv.classList.remove("streaming"); // Remove streaming class if error occurs here
-      currentAssistantMessageDiv.classList.add("error"); // Optional: add error class
+      currentAssistantMessageDiv.classList.remove("streaming");
+      currentAssistantMessageDiv.classList.add("error");
     }
-    isAIResponding = false; // Reset flag on invoke error
+    isAIResponding = false;
 
-    // Even on error, if we *tried* to send OCR text, attempt cleanup
-    if (tempPathToClean) {
-      console.warn("Cleaning up temp screenshot after failed invoke:", tempPathToClean);
-      invoke("cleanup_temp_screenshot", { path: tempPathToClean }).catch((err) =>
-        console.error("Error cleaning up temp screenshot post-failure:", err),
-      );
-    }
+    await clearInlineImageAndData(); // Clear image data on error too
   } finally {
-    updateInputAreaLayout(); // ADDED: Ensure layout is correct after input clear/reset
-    updateInputAreaForCapture();
+    updateInputAreaLayout();
   }
 }
 
@@ -1778,7 +1816,7 @@ async function setupStreamListeners() {
       });
     }
     if (messageInput) {
-      messageInput.disabled = false; // This now means "allow sending again"
+      messageInput.contentEditable = "true"; // MODIFIED
       // messageInput.focus();
     }
 
@@ -1818,7 +1856,7 @@ async function setupStreamListeners() {
       addMessageToHistory("Shard", `Error: ${event.payload.error}`);
     }
     if (messageInput) {
-      messageInput.disabled = false; // This now means "allow sending again"
+      messageInput.contentEditable = "true"; // MODIFIED
       // messageInput.focus();
     }
 
@@ -2143,6 +2181,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   addToolStatusStyles(); // ADDED: Call the function to inject styles
   await setInitialWindowGeometry(); // Set fixed window size and position
   updateInputAreaLayout(); // ADDED: Initial layout setup
+  updatePlaceholderState(); // ADDED: Initial placeholder check
 
   // --- Click-Through Logic ---
   // Ensure the window is interactive when it gains focus
@@ -2314,18 +2353,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   if (messageInput) {
-    // Set initial height correctly
-    messageInput.style.height = initialTextareaHeight;
-    messageInput.style.overflowY = "hidden";
+    // Set initial height correctly - not strictly needed for div, but ensure no fixed style
+    // messageInput.style.height = initialTextareaHeight; // REMOVED for div
+    // messageInput.style.overflowY = "hidden"; // REMOVED for div, now 'auto' via CSS
 
-    // Add input event listener for auto-resizing
-    messageInput.addEventListener("input", autoResizeTextarea);
+    // MODIFIED: Event listeners for contenteditable div
+    messageInput.addEventListener("input", () => {
+      updatePlaceholderState(); // ADDED: Update placeholder on any input
+      updateInputAreaLayout();
+    });
 
-    messageInput.addEventListener("keypress", (event) => {
+    messageInput.addEventListener("keydown", async (event) => { // Changed to keydown for Backspace
       if (event.key === "Enter" && !event.shiftKey) {
-        // Allow Shift+Enter for newlines if desired
-        event.preventDefault(); // Prevent default Enter behavior (like adding newline)
-        handleSendMessage();
+        event.preventDefault();
+        await handleSendMessage();
+      } else if (event.key === "Backspace") {
+        const textContent = getTextFromContentEditable(messageInput);
+        // Check if the div is visually empty (only contains our image wrapper or is truly empty)
+        const firstChild = messageInput.firstChild;
+        const isEffectivelyEmpty = !textContent ||
+          (firstChild && (firstChild as HTMLElement).classList?.contains('inline-image-wrapper') && !firstChild.nextSibling && messageInput.textContent?.trim() === "");
+
+
+        if (isEffectivelyEmpty && currentImageBase64) {
+          event.preventDefault();
+          await clearInlineImageAndData();
+        }
       }
     });
   }

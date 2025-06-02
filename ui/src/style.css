@@ -121,7 +121,7 @@ body {
     /* justify-content: flex-end; */ /* Handled by #chat-history now */
     overflow: hidden; /* Prevent this container from scrolling, #chat-history will scroll */
     position: relative; /* For potential future absolute positioned children if any */
-    margin-top: 20px;
+    margin-top: 24px;
 }
 
 /* Chat History - Fix Order & Bottom Alignment & Hide Scrollbar */
@@ -831,17 +831,77 @@ body {
     outline: none; /* Remove focus outline */
     /* Textarea specific styles */
     resize: none; /* Disable manual resize handle */
-    overflow-y: hidden; /* Hide scrollbar, rely on JS for height */
+    /* MODIFIED for contenteditable div */
+    overflow-y: auto; /* Allow scrolling */
     line-height: 1.4; /* Match body line-height */
-    min-height: 30px; /* Start at single line height */
+    min-height: 30px; /* Start at single line height - same as initialTextareaHeight */
+    max-height: 200px; /* Max height before scrolling */
     font-family: inherit; /* Ensure font matches */
     white-space: pre-wrap; /* Respect newlines and wrap */
     word-wrap: break-word; /* Break long words */
+    -webkit-user-modify: read-write-plaintext-only; /* Attempt to keep paste simple */
+}
+
+/* ADDED: Styles for placeholder text on contenteditable div */
+#message-input.placeholder-active::before {
+  content: "Type your message..."; /* Your placeholder text */
+  position: absolute;
+  left: 16px; /* Should match #message-input padding-left */
+  top: 14px;   /* Should match #message-input padding-top */
+  color: rgba(255, 255, 255, 0.4); /* Placeholder text color */
+  pointer-events: none; /* Allows clicks to pass through to the input */
+}
+
+/* ADDED: Styles for inline image within contenteditable */
+.inline-image-wrapper {
+  display: inline-block;
+  position: relative;
+  vertical-align: middle;
+  margin: 2px 4px 2px 2px;
+  line-height: normal;
+  max-width: calc(100% - 10px);
+}
+
+.inline-image-wrapper img {
+  max-width: 100%;
+  max-height: 80px;
+  border-radius: 4px;
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.delete-inline-image-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: rgba(30, 30, 30, 0.8);
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.2s ease-in-out;
+  z-index: 10;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.delete-inline-image-btn:hover {
+  opacity: 1;
+  background-color: rgba(200, 0, 0, 0.9);
+  color: white;
+  transform: scale(1.1);
 }
 
 /* --- Fade Animations for Window Toggle --- */
 body.fade-in {
-    opacity: 1 !important; /* Important to override inline style of opacity 0 */
+    opacity: 1 !important;
     transition: opacity 200ms ease-in-out;
 }
 
@@ -861,7 +921,7 @@ body.fade-out {
 .heading-with-status {
     display: flex;
     align-items: center;
-    gap: 0px; /* Space between heading and icon */
+    gap: 0px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -882,7 +942,7 @@ body.fade-out {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    font-size: 1em; /* Adjust size as needed */
+    font-size: 1em;
     color: #c7c7c7;
     background-color: transparent;
     opacity: 0;
@@ -897,8 +957,8 @@ body.fade-out {
 .web-search-status-container {
     display: flex;
     align-items: center;
-    gap: 8px; /* Space between icon and text */
-    padding: 5px 0; /* Some vertical padding */
+    gap: 8px;
+    padding: 5px 0;
     font-style: italic;
     color: rgba(255, 255, 255, 0.7);
 }
@@ -935,10 +995,10 @@ body.fade-out {
 .financial-data-status-container {
     display: flex;
     align-items: center;
-    gap: 8px; /* Space between icon and text */
-    padding: 5px 0; /* Some vertical padding */
+    gap: 8px;
+    padding: 5px 0;
     font-style: italic;
-    color: var(--text-secondary-color); /* Or your preferred color */
+    color: var(--text-secondary-color);
     background-color: transparent;
     border-radius: 8px;
 }
@@ -951,11 +1011,11 @@ body.fade-out {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 0; /* Adjust padding as needed */
-    margin-bottom: 8px; /* Space before the main LLM content */
-    font-size: 0.85em; /* Slightly smaller than main text */
-    color: var(--text-secondary-color); /* Or your preferred color */
-    border-bottom: 1px solid var(--border-color); /* Optional: a light separator */
+    padding: 4px 0;
+    margin-bottom: 8px;
+    font-size: 0.85em;
+    color: var(--text-secondary-color);
+    border-bottom: 1px solid var(--border-color);
 }
 
 /* ADDED: Styles for the persistent Web Search Source container */
@@ -963,22 +1023,21 @@ body.fade-out {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 0; /* Similar to financial-data-source-container */
-    margin-bottom: 8px; /* Space before the main LLM content */
-    font-size: 0.85em; /* Slightly smaller than main text */
-    color: rgba(255, 255, 255, 0.7); /* Consistent with other secondary text */
-    /* border-bottom: 1px solid rgba(255, 255, 255, 0.08); */ /* Optional: a very light separator */
+    padding: 4px 0;
+    margin-bottom: 8px;
+    font-size: 0.85em;
+    color: rgba(255, 255, 255, 0.7);
 }
 
 .web-search-accordion {
-    margin-bottom: 5px;
+    margin: 0 0 8px 0;
     border: 1px solid rgba(0, 0, 0, 0);
     border-radius: 6px;
     background-color: rgba(0, 0, 0, 0);
 }
 
 .web-search-accordion-toggle {
-    padding: 0 12px;
+    padding: 0px 12px 6px 12px;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1062,7 +1121,7 @@ body.fade-out {
 
 /* Add custom triangle marker for web search accordion */
 .web-search-accordion-toggle {
-    list-style: none; /* Remove default marker */
+    list-style: none;
     position: relative;
     padding-left: 4px;
 }
@@ -1081,7 +1140,6 @@ body.fade-out {
 
 /* Styles for ArXiv search accordion content */
 .web-search-content.arxiv-content {
-    /* Similar to other search content, can be adjusted */
     transition:
         max-height 0.3s ease-in-out,
         opacity 0.3s ease-in-out,
@@ -1090,9 +1148,9 @@ body.fade-out {
 }
 
 .arxiv-paper-summary {
-    margin-bottom: 15px; /* Space between paper entries */
+    margin-bottom: 15px;
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08); /* Separator for papers */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .arxiv-paper-summary:last-child {
@@ -1120,14 +1178,13 @@ body.fade-out {
 }
 
 .arxiv-summary-text {
-    /* Specific styling for the abstract summary if needed */
 }
 
 .arxiv-pdf-link {
     display: inline-block;
     margin-top: 4px;
     font-size: 0.9em;
-    color: #007aff; /* Standard link color */
+    color: #007aff;
     text-decoration: none;
 }
 
@@ -1137,7 +1194,7 @@ body.fade-out {
 
 /* Add custom triangle marker for web search accordion */
 .web-search-accordion-toggle {
-    list-style: none; /* Remove default marker */
+    list-style: none;
     position: relative;
     display: flex;
     flex-direction: row;
@@ -1147,12 +1204,11 @@ body.fade-out {
 .weather-lookup-status-container,
 .financial-data-status-container,
 .arxiv-lookup-status-container {
-    /* ADDED for ArXiv */
     background-color: transparent;
     border-radius: 8px;
     margin-bottom: 10px;
-    display: flex; /* Ensures icon and text are in a row */
-    align-items: center; /* Vertically aligns icon and text */
+    display: flex;
+    align-items: center;
     padding-left: 4px;
     gap: 8px;
     color: rgba(255, 255, 255, 0.7);
@@ -1162,12 +1218,9 @@ body.fade-out {
 .weather-lookup-status-text,
 .financial-data-status-text,
 .arxiv-lookup-status-text {
-    /* ADDED for ArXiv */
     font-size: 0.9em;
-    flex-grow: 1; /* Allows text to take available space */
-    line-height: 1.3; /* Adjust for better text flow if it wraps */
-    /* Potentially add a max-width if you want to control wrapping more explicitly, */
-    /* but flex-grow should handle it within the container. */
+    flex-grow: 1;
+    line-height: 1.3;
 }
 
 /* Image Preview Accordion Styles (similar to OCR) */
@@ -1180,8 +1233,8 @@ body.fade-out {
     font-size: 0.85em;
     color: rgba(255, 255, 255, 0.6);
     position: relative;
-    padding-left: 24px; /* Space for image icon */
-    outline: none; /* Remove focus outline */
+    padding-left: 24px;
+    outline: none;
     transition: color 0.2s;
     background: none;
     border: none;
@@ -1213,7 +1266,7 @@ body.fade-out {
 
 .image-preview-content {
     margin-top: 8px;
-    padding: 0 10px; /* Padding around the image container */
+    padding: 8px 10px;
     background-color: rgba(0, 0, 0, 0.15);
     border-radius: 8px;
     overflow: hidden;
@@ -1226,12 +1279,11 @@ body.fade-out {
 }
 
 .image-preview-content.open {
-    max-height: 320px; /* Max height for image + padding */
+    max-height: 320px;
     opacity: 1;
-    overflow-y: auto; /* If image is very tall */
+    overflow-y: auto;
 }
 
 .image-preview-content img {
-    display: block; /* Removes extra space below image if it were inline */
-    /* max-width, max-height, border-radius, object-fit are set inline in main.ts */
+    display: block;
 }

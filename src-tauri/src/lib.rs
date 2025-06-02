@@ -1,7 +1,9 @@
 #![allow(unexpected_cfgs)] // Added to suppress unexpected_cfgs warnings from dependencies
 
+use arxiv_tools::Paper as ArXivPaper; // SortOrder as ArXivSortOrder};
 use base64::{engine::general_purpose, Engine as _}; // Added base64 import
 use image::{DynamicImage, ImageFormat};
+use quick_xml::de::from_str;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -10,6 +12,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::PhysicalPosition;
 use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent}; // Added Emitter and Window
 use tauri_nspanel::WebviewWindowExt; // CORRECTED IMPORT
@@ -19,11 +22,13 @@ use tauri_plugin_global_shortcut::{
 };
 use tesseract; // Uncommented
 use time::OffsetDateTime;
+use urlencoding; // Added urlencoding crate for URL encoding
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
 use yahoo_finance_api as yfa; // Using an alias for brevity // For timestamp conversion
-use arxiv_tools::{Paper as ArXivPaper};// SortOrder as ArXivSortOrder};
-use urlencoding; // Added urlencoding crate for URL encoding
-use quick_xml::de::from_str;
+
+// Per-stream cancellation system
+static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
+static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(u64::MAX); // Use MAX as "no cancellation"
 
 // --- ADDED: Structs for parsing ArXiv Atom XML response ---
 #[derive(Debug, Deserialize, Default)]
@@ -796,11 +801,7 @@ async fn geocode_location(
                     }
                 }
             } else {
-                log::error!(
-                    "Geocoding: API error status {}: {}",
-                    status,
-                    response_text
-                );
+                log::error!("Geocoding: API error status {}: {}", status, response_text);
                 Err(format!(
                     "Geocoding API error: {} - {}",
                     status, response_text
@@ -1150,6 +1151,8 @@ async fn send_text_to_model(
     app_handle: AppHandle,
     window: Window,
 ) -> Result<(), String> {
+    // Generate unique stream ID for this request
+    let stream_id = CURRENT_STREAM_ID.fetch_add(1, Ordering::Relaxed) + 1;
     // Create a new message list, starting with the system instruction.
     let mut final_messages = Vec::new();
     final_messages.push(ChatMessage {
@@ -1541,23 +1544,38 @@ async fn send_text_to_model(
                                 query: user_query.to_string(),
                             },
                         ) {
-                            log::warn!("Failed to emit ARXIV_LOOKUP_STARTED event: {}",e);
+                            log::warn!("Failed to emit ARXIV_LOOKUP_STARTED event: {}", e);
                         }
 
                         // Use LLM to extract search parameters for arXiv
-                        match extract_arxiv_query_parameters(&client, user_query, &decider_gemini_api_key_string, &decider_model_name).await {
-                            Ok(arxiv_search_string) => { // MODIFIED: Now expects Ok(String)
-                                match perform_arxiv_lookup(&client, arxiv_search_string).await { // MODIFIED: Pass client and string
+                        match extract_arxiv_query_parameters(
+                            &client,
+                            user_query,
+                            &decider_gemini_api_key_string,
+                            &decider_model_name,
+                        )
+                        .await
+                        {
+                            Ok(arxiv_search_string) => {
+                                // MODIFIED: Now expects Ok(String)
+                                match perform_arxiv_lookup(&client, arxiv_search_string).await {
+                                    // MODIFIED: Pass client and string
                                     Ok(papers) => {
                                         log::info!("ArXiv lookup successful for query: '{}'. Found {} papers.", user_query, papers.len());
-                                        let summaries: Vec<ArxivPaperSummary> = papers.iter().map(|p| ArxivPaperSummary {
-                                            title: p.title.clone(),
-                                            summary: p.abstract_text.clone(), // FIX: Use abstract_text
-                                            authors: p.authors.clone(),
-                                            id: p.id.clone(),
-                                            published_date: Some(p.published.clone()), // FIX: Wrap in Some()
-                                            pdf_url: format!("https://arxiv.org/pdf/{}", p.id.replace("http://arxiv.org/abs/", "")),
-                                        }).collect();
+                                        let summaries: Vec<ArxivPaperSummary> = papers
+                                            .iter()
+                                            .map(|p| ArxivPaperSummary {
+                                                title: p.title.clone(),
+                                                summary: p.abstract_text.clone(), // FIX: Use abstract_text
+                                                authors: p.authors.clone(),
+                                                id: p.id.clone(),
+                                                published_date: Some(p.published.clone()), // FIX: Wrap in Some()
+                                                pdf_url: format!(
+                                                    "https://arxiv.org/pdf/{}",
+                                                    p.id.replace("http://arxiv.org/abs/", "")
+                                                ),
+                                            })
+                                            .collect();
 
                                         if let Err(e) = window.emit(
                                             "ARXIV_LOOKUP_COMPLETED",
@@ -1571,7 +1589,8 @@ async fn send_text_to_model(
                                             log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (success) event: {}", e);
                                         }
                                         let mut result_text_parts = Vec::new();
-                                        for summary in summaries.iter().take(2) { // Limit to 2 summaries for context
+                                        for summary in summaries.iter().take(2) {
+                                            // Limit to 2 summaries for context
                                             result_text_parts.push(format!(
                                                 "Title: {}\nAuthors: {}\nSummary: {}\nPDF: {}\n",
                                                 summary.title,
@@ -1588,7 +1607,11 @@ async fn send_text_to_model(
                                         arxiv_lookup_performed_successfully = true;
                                     }
                                     Err(e) => {
-                                        log::error!("ArXiv lookup failed for query '{}'. Error: {}", user_query, e);
+                                        log::error!(
+                                            "ArXiv lookup failed for query '{}'. Error: {}",
+                                            user_query,
+                                            e
+                                        );
                                         if let Err(emit_err) = window.emit(
                                             "ARXIV_LOOKUP_COMPLETED",
                                             ArxivLookupCompletedPayload {
@@ -1603,15 +1626,19 @@ async fn send_text_to_model(
                                     }
                                 }
                             }
-                            Err(e) => { // MODIFIED: Handle Err from extract_arxiv_query_parameters
+                            Err(e) => {
+                                // MODIFIED: Handle Err from extract_arxiv_query_parameters
                                 log::error!("Failed to extract ArXiv query parameters for query '{}'. Error: {}. Emitting error event.", user_query, e);
-                                 if let Err(emit_err) = window.emit(
+                                if let Err(emit_err) = window.emit(
                                     "ARXIV_LOOKUP_COMPLETED",
                                     ArxivLookupCompletedPayload {
                                         query: user_query.to_string(),
                                         success: false,
                                         results: None,
-                                        error: Some(format!("Failed to understand search parameters: {}", e)),
+                                        error: Some(format!(
+                                            "Failed to understand search parameters: {}",
+                                            e
+                                        )),
                                     },
                                 ) {
                                     log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (param extraction error) event: {}", emit_err);
@@ -1655,7 +1682,8 @@ async fn send_text_to_model(
                 financial_data_result_text.unwrap()
             ),
         });
-    } else if arxiv_lookup_performed_successfully && arxiv_lookup_result_text.is_some() { // ADDED ArXiv
+    } else if arxiv_lookup_performed_successfully && arxiv_lookup_result_text.is_some() {
+        // ADDED ArXiv
         final_messages.push(ChatMessage {
             role: "user".to_string(),
             content: format!(
@@ -1691,6 +1719,7 @@ async fn send_text_to_model(
             gemini_api_key,
             model_name.replace("google/", ""),
             window.clone(),
+            stream_id,
         )
         .await
         {
@@ -1719,8 +1748,15 @@ async fn send_text_to_model(
             model_name,
             DEFAULT_MODEL
         );
-        match call_openrouter_api(&client, final_messages, api_key, model_name, window.clone())
-            .await
+        match call_openrouter_api(
+            &client,
+            final_messages,
+            api_key,
+            model_name,
+            window.clone(),
+            stream_id,
+        )
+        .await
         {
             // Pass client
             Ok(_) => Ok(()),
@@ -1826,7 +1862,16 @@ async fn set_enable_web_search(enable: bool, app_handle: AppHandle) -> Result<()
 #[tauri::command]
 async fn get_enable_web_search(app_handle: AppHandle) -> Result<bool, String> {
     load_config(&app_handle).map(|config| config.enable_web_search.unwrap_or(true))
-    // Default to true
+}
+
+// --- ADDED: Command to cancel current stream ---
+#[tauri::command]
+async fn cancel_current_stream() -> Result<(), String> {
+    log::info!("Stream cancellation requested");
+    let current_stream = CURRENT_STREAM_ID.load(Ordering::Relaxed);
+    CANCELLED_STREAM_ID.store(current_stream, Ordering::Relaxed);
+    log::info!("Cancelled stream ID: {}", current_stream);
+    Ok(())
 }
 
 // --- API Call Logic ---
@@ -1836,6 +1881,7 @@ async fn call_gemini_api(
     api_key: String,
     model_identifier_from_config: String, // RENAMED for clarity
     window: Window,
+    stream_id: u64,
 ) -> Result<(), String> {
     let mut actual_model_name_for_api = model_identifier_from_config.clone();
     let mut gen_config: Option<GenerationConfigForGemini> = None;
@@ -1914,6 +1960,12 @@ async fn call_gemini_api(
                 let mut line_buffer = String::new(); // To handle multi-byte UTF-8 chars split across chunks
 
                 while let Some(item) = stream.next().await {
+                    // Check for cancellation
+                    if stream_id == CANCELLED_STREAM_ID.load(Ordering::Relaxed) {
+                        log::info!("Gemini stream {} cancelled by user", stream_id);
+                        break;
+                    }
+
                     match item {
                         Ok(chunk_bytes) => {
                             match std::str::from_utf8(&chunk_bytes) {
@@ -1953,15 +2005,21 @@ async fn call_gemini_api(
                                                         {
                                                             let content_text = &part.text;
 
-                                                            // Parse reasoning from content
-                                                            let (content, reasoning) =
-                                                                separate_reasoning_from_content(
-                                                                    content_text,
-                                                                );
-                                                            current_chunk_content = content;
-                                                            if !reasoning.is_empty() {
-                                                                current_chunk_reasoning =
-                                                                    Some(reasoning);
+                                                            if model_identifier_from_config.ends_with("#thinking-enabled") {
+                                                                // Parse reasoning from content only for thinking-enabled models
+                                                                let (content, reasoning) =
+                                                                    separate_reasoning_from_content(
+                                                                        content_text,
+                                                                    );
+                                                                current_chunk_content = content;
+                                                                if !reasoning.is_empty() {
+                                                                    current_chunk_reasoning =
+                                                                        Some(reasoning);
+                                                                }
+                                                            } else {
+                                                                // For non-thinking models, use the content as is
+                                                                current_chunk_content = content_text.to_string();
+                                                                // current_chunk_reasoning remains None
                                                             }
 
                                                             accumulated_content
@@ -2037,27 +2095,55 @@ async fn call_gemini_api(
                         }
                     }
                 }
-                // Stream ended
-                log::info!(
-                    "Gemini stream finished. Accumulated content: {}",
-                    accumulated_content
-                );
+                // Stream ended - check if cancelled or completed normally
+                if stream_id == CANCELLED_STREAM_ID.load(Ordering::Relaxed) {
+                    // Stream was cancelled intentionally
+                    log::info!("Gemini stream ended due to cancellation");
 
-                // Final separation of reasoning from content for stream end
-                let (final_content, final_reasoning) =
-                    separate_reasoning_from_content(&accumulated_content);
+                    // Final separation of reasoning from content for cancelled stream
+                    let (final_content, final_reasoning) = if model_identifier_from_config.ends_with("#thinking-enabled") {
+                        separate_reasoning_from_content(&accumulated_content)
+                    } else {
+                        (accumulated_content.clone(), String::new())
+                    };
 
-                let _ = window.emit(
-                    "STREAM_END",
-                    StreamEndPayload {
-                        full_content: final_content,
-                        reasoning: if final_reasoning.is_empty() {
-                            None
-                        } else {
-                            Some(final_reasoning)
+                    let _ = window.emit(
+                        "STREAM_END",
+                        StreamEndPayload {
+                            full_content: final_content,
+                            reasoning: if final_reasoning.is_empty() {
+                                None
+                            } else {
+                                Some(final_reasoning)
+                            },
                         },
-                    },
-                );
+                    );
+                } else {
+                    // Stream completed normally
+                    log::info!(
+                        "Gemini stream finished. Accumulated content: {}",
+                        accumulated_content
+                    );
+
+                    // Final separation of reasoning from content for stream end
+                    let (final_content, final_reasoning) = if model_identifier_from_config.ends_with("#thinking-enabled") {
+                        separate_reasoning_from_content(&accumulated_content)
+                    } else {
+                        (accumulated_content.clone(), String::new())
+                    };
+
+                    let _ = window.emit(
+                        "STREAM_END",
+                        StreamEndPayload {
+                            full_content: final_content,
+                            reasoning: if final_reasoning.is_empty() {
+                                None
+                            } else {
+                                Some(final_reasoning)
+                            },
+                        },
+                    );
+                }
                 Ok(())
             } else {
                 let status = response.status();
@@ -2103,6 +2189,7 @@ async fn call_openrouter_api(
     api_key: String,
     model_name: String,
     window: Window,
+    stream_id: u64,
 ) -> Result<(), String> {
     let api_url = "https://openrouter.ai/api/v1/chat/completions";
     let mut request_payload = ChatCompletionRequest {
@@ -2146,6 +2233,12 @@ async fn call_openrouter_api(
                 let mut line_buffer = String::new();
 
                 while let Some(item) = stream.next().await {
+                    // Check for cancellation
+                    if stream_id == CANCELLED_STREAM_ID.load(Ordering::Relaxed) {
+                        log::info!("OpenRouter stream {} cancelled by user", stream_id);
+                        break;
+                    }
+
                     match item {
                         Ok(chunk_bytes) => {
                             match std::str::from_utf8(&chunk_bytes) {
@@ -2167,7 +2260,8 @@ async fn call_openrouter_api(
                                                     if accumulated_reasoning.is_empty() {
                                                         None
                                                     } else {
-                                                        Some(accumulated_reasoning.clone()) // Clone here
+                                                        Some(accumulated_reasoning.clone())
+                                                        // Clone here
                                                     };
                                                 let _ = window.emit(
                                                     "STREAM_END",
@@ -2187,8 +2281,12 @@ async fn call_openrouter_api(
                                                     if let Some(choice) =
                                                         parsed_chunk.choices.get(0)
                                                     {
-                                                        let mut content_delta_to_emit: Option<String> = None;
-                                                        let mut reasoning_delta_to_emit: Option<String> = None;
+                                                        let mut content_delta_to_emit: Option<
+                                                            String,
+                                                        > = None;
+                                                        let mut reasoning_delta_to_emit: Option<
+                                                            String,
+                                                        > = None;
 
                                                         if let Some(content_delta) =
                                                             &choice.delta.content
@@ -2196,7 +2294,8 @@ async fn call_openrouter_api(
                                                             if !content_delta.is_empty() {
                                                                 accumulated_content
                                                                     .push_str(content_delta);
-                                                                content_delta_to_emit = Some(content_delta.clone());
+                                                                content_delta_to_emit =
+                                                                    Some(content_delta.clone());
                                                             }
                                                         }
 
@@ -2207,18 +2306,32 @@ async fn call_openrouter_api(
                                                                 log::debug!("Received reasoning delta for OpenRouter: '{}'", reasoning_delta);
                                                                 accumulated_reasoning
                                                                     .push_str(reasoning_delta);
-                                                                reasoning_delta_to_emit = Some(reasoning_delta.clone());
+                                                                reasoning_delta_to_emit =
+                                                                    Some(reasoning_delta.clone());
                                                             }
                                                         }
 
                                                         // Emit StreamChoiceDelta if there's either content or reasoning
-                                                        if content_delta_to_emit.is_some() || reasoning_delta_to_emit.is_some() {
+                                                        if content_delta_to_emit.is_some()
+                                                            || reasoning_delta_to_emit.is_some()
+                                                        {
                                                             if let Err(e) = window.emit(
                                                                 "STREAM_CHUNK",
-                                                                StreamChoiceDelta { // MODIFIED to StreamChoiceDelta
+                                                                StreamChoiceDelta {
+                                                                    // MODIFIED to StreamChoiceDelta
                                                                     content: content_delta_to_emit,
-                                                                    role: choice.delta.role.clone().or_else(|| Some("assistant".to_string())), // Populate role
-                                                                    reasoning: reasoning_delta_to_emit,
+                                                                    role: choice
+                                                                        .delta
+                                                                        .role
+                                                                        .clone()
+                                                                        .or_else(|| {
+                                                                            Some(
+                                                                                "assistant"
+                                                                                    .to_string(),
+                                                                            )
+                                                                        }), // Populate role
+                                                                    reasoning:
+                                                                        reasoning_delta_to_emit,
                                                                 },
                                                             ) {
                                                                 log::error!("Failed to emit STREAM_CHUNK (StreamChoiceDelta): {}", e);
@@ -2270,30 +2383,48 @@ async fn call_openrouter_api(
                         }
                     }
                 }
-                // If loop finishes without [DONE], it might be an incomplete stream or an issue.
-                // Emit an error or handle as appropriate. For now, assume [DONE] is the primary exit.
-                log::warn!("OpenRouter stream ended without [DONE] marker.");
-                // Ensure final accumulated reasoning is included if the stream ends abruptly
-                let final_reasoning_abrupt = if accumulated_reasoning.is_empty() {
-                    None
+                // If loop finishes without [DONE], check if it was cancelled or an actual error
+                if stream_id == CANCELLED_STREAM_ID.load(Ordering::Relaxed) {
+                    // Stream was cancelled intentionally, don't emit error
+                    log::info!("OpenRouter stream ended due to cancellation");
+                    let final_reasoning_cancelled = if accumulated_reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(accumulated_reasoning)
+                    };
+                    let _ = window.emit(
+                        "STREAM_END",
+                        StreamEndPayload {
+                            full_content: accumulated_content,
+                            reasoning: final_reasoning_cancelled,
+                        },
+                    );
+                    Ok(()) // Return Ok since cancellation is not an error
                 } else {
-                    Some(accumulated_reasoning)
-                };
-                let _ = window.emit(
-                    "STREAM_END", // Emit STREAM_END even on abrupt finish, possibly with partial content
-                    StreamEndPayload {
-                        full_content: accumulated_content, // Send whatever content was accumulated
-                        reasoning: final_reasoning_abrupt,
-                    },
-                );
-                // Then emit the error
-                let _ = window.emit(
-                    "STREAM_ERROR",
-                    StreamErrorPayload {
-                        error: "Stream ended without [DONE] marker".to_string(),
-                    },
-                );
-                Err("Stream ended without [DONE] marker".to_string())
+                    // Stream ended unexpectedly without cancellation
+                    log::warn!("OpenRouter stream ended without [DONE] marker.");
+                    // Ensure final accumulated reasoning is included if the stream ends abruptly
+                    let final_reasoning_abrupt = if accumulated_reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(accumulated_reasoning)
+                    };
+                    let _ = window.emit(
+                        "STREAM_END", // Emit STREAM_END even on abrupt finish, possibly with partial content
+                        StreamEndPayload {
+                            full_content: accumulated_content, // Send whatever content was accumulated
+                            reasoning: final_reasoning_abrupt,
+                        },
+                    );
+                    // Then emit the error
+                    let _ = window.emit(
+                        "STREAM_ERROR",
+                        StreamErrorPayload {
+                            error: "Stream ended without [DONE] marker".to_string(),
+                        },
+                    );
+                    Err("Stream ended without [DONE] marker".to_string())
+                }
             } else {
                 let status = response.status();
                 let error_text = response
@@ -2740,13 +2871,12 @@ pub async fn perform_iterative_wikipedia_research(
                 let mut actual_page_title_opt: Option<String> = None;
                 let mut page_url_opt: Option<String> = None;
 
-                // The Wikipedia lookup returns a Vec of tuples (title, extract, url)
-                for (title, extract, url) in pages {
+                // The Wikipedia lookup returns a single tuple (title, extract, url)
+                if let Some((title, extract, url)) = pages {
                     if !extract.is_empty() {
                         page_content_opt = Some(extract.clone());
                         actual_page_title_opt = Some(title.clone());
                         page_url_opt = Some(url.clone());
-                        break; // Found a usable page
                     }
                 }
 
@@ -3008,21 +3138,19 @@ async fn perform_weather_lookup(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let show_hide_modifiers = if cfg!(target_os = "macos") {
-        tauri_gs::Modifiers::SUPER | tauri_gs::Modifiers::SHIFT
-    } else {
-        tauri_gs::Modifiers::CONTROL | tauri_gs::Modifiers::SHIFT
-    };
-    let show_hide_shortcut_definition =
-        tauri_gs::Shortcut::new(Some(show_hide_modifiers), tauri_gs::Code::KeyZ);
+    // Create shortcut for Control+Space
+    let ctrl_space_shortcut_definition =
+        tauri_gs::Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::Space);
+
+    log::info!("[Plugin Shortcut] Registering Control+Space shortcut for toggle functionality");
 
     tauri::Builder::default()
         .plugin(
             tauri_gs::Builder::new()
                 .with_handler(move |app_handle: &AppHandle, shortcut_fired: &Shortcut, event: ShortcutEvent| {
-                    if shortcut_fired == &show_hide_shortcut_definition {
+                    if shortcut_fired == &ctrl_space_shortcut_definition {
                         if event.state() == ShortcutState::Pressed {
-                            log::info!("[Plugin Shortcut] CmdOrCtrl+Shift+Z pressed. Emitting event to frontend.");
+                            log::info!("[Plugin Shortcut] Control+Space pressed. Emitting event to frontend.");
                             app_handle.emit("toggle-main-window", ()).unwrap_or_else(|e| {
                                 eprintln!("[Plugin Shortcut] Failed to emit toggle-main-window event: {}", e);
                             });
@@ -3035,10 +3163,12 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(desktop)]
             {
-                if let Err(e) = app.global_shortcut().register(show_hide_shortcut_definition.clone()) {
+                if let Err(e) = app.global_shortcut().register(ctrl_space_shortcut_definition.clone()) {
                     eprintln!("Failed to register global shortcut via plugin in setup: {}", e);
+                    log::error!("Failed to register Control+Space shortcut: {}", e);
                 } else {
-                    log::info!("Successfully registered global shortcut via plugin in setup: CmdOrCtrl+Shift+Z");
+                    log::info!("Successfully registered global shortcut via plugin in setup: Control+Space");
+                    println!("Control+Space shortcut registered successfully - try pressing Control+Space");
                 }
             }
 
@@ -3168,7 +3298,8 @@ pub fn run() {
             set_gemini_api_key,
             trigger_backend_window_toggle,
             set_enable_web_search,
-            get_enable_web_search
+            get_enable_web_search,
+            cancel_current_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -3180,7 +3311,8 @@ async fn extract_arxiv_query_parameters(
     user_query: &str,
     gemini_api_key: &str,
     model_name: &str,
-) -> Result<String, String> { // MODIFIED: Return type is now Result<String, String>
+) -> Result<String, String> {
+    // MODIFIED: Return type is now Result<String, String>
     let prompt = format!(
         "You are an expert at understanding user queries for searching academic papers on arXiv. \
         Your task is to extract search terms from the user's natural language query and structure them as a JSON object. \
@@ -3218,25 +3350,37 @@ async fn extract_arxiv_query_parameters(
         client,
         extractor_messages,
         gemini_api_key,
-        model_name.to_string()
-    ).await {
+        model_name.to_string(),
+    )
+    .await
+    {
         Ok(response_str) => {
-            let json_response_str = response_str.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
-            log::info!("LLM suggested ArXiv parameters (JSON): {}", json_response_str);
+            let json_response_str = response_str
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            log::info!(
+                "LLM suggested ArXiv parameters (JSON): {}",
+                json_response_str
+            );
 
             match serde_json::from_str::<ArxivSearchParameters>(json_response_str) {
-                Ok(parsed_params) => {
-                    Ok(build_final_arxiv_search_string(parsed_params, user_query))
-                }
+                Ok(parsed_params) => Ok(build_final_arxiv_search_string(parsed_params, user_query)),
                 Err(e) => {
                     log::error!("Failed to parse ArXiv parameters JSON: {}. Raw: '{}'. Falling back to original query for search string.", e, json_response_str);
-                    Ok(user_query.trim_matches(|c| c == '"' || c == '\'').to_string()) // Fallback on JSON parsing error
+                    Ok(user_query
+                        .trim_matches(|c| c == '"' || c == '\'')
+                        .to_string()) // Fallback on JSON parsing error
                 }
             }
         }
         Err(e) => {
             log::error!("Error calling ArXiv parameter extractor LLM for query '{}': {}. Falling back to original query for search string.", user_query, e);
-            Ok(user_query.trim_matches(|c| c == '"' || c == '\'').to_string()) // Fallback on LLM call error
+            Ok(user_query
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string()) // Fallback on LLM call error
         }
     }
 }
@@ -3244,14 +3388,16 @@ async fn extract_arxiv_query_parameters(
 // --- ADDED: Helper function to construct the final search query string for arXiv ---
 fn build_final_arxiv_search_string(
     params: ArxivSearchParameters,
-    original_user_query: &str
+    original_user_query: &str,
 ) -> String {
     let mut query_components: Vec<String> = Vec::new();
 
     // Handle title: unfielded, unquoted
     if let Some(title_str) = &params.title {
         // Use the trim_matches logic that was already added by the user
-        let cleaned_title = title_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        let cleaned_title = title_str
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
         if !cleaned_title.is_empty() {
             query_components.push(cleaned_title);
         }
@@ -3259,7 +3405,9 @@ fn build_final_arxiv_search_string(
 
     // Handle author: fielded, potentially quoted for phrases
     if let Some(author_str) = &params.author {
-        let cleaned_author = author_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        let cleaned_author = author_str
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
         if !cleaned_author.is_empty() {
             // arXiv API au: field. Quotes for exact phrase if space is present.
             let author_query_part = if cleaned_author.contains(char::is_whitespace) {
@@ -3273,7 +3421,9 @@ fn build_final_arxiv_search_string(
 
     // Handle abstract: fielded, quoted for phrases
     if let Some(abstract_str) = &params.abstract_text {
-        let cleaned_abstract = abstract_str.trim_matches(|c| c == '"' || c == '\'').to_string();
+        let cleaned_abstract = abstract_str
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
         if !cleaned_abstract.is_empty() {
             query_components.push(format!("abs:\"{}\"", cleaned_abstract));
         }
@@ -3281,20 +3431,28 @@ fn build_final_arxiv_search_string(
 
     if query_components.is_empty() {
         log::info!("No specific ArXiv parameters extracted, using original query for unfielded search: '{}'", original_user_query);
-        return original_user_query.trim_matches(|c| c == '"' || c == '\'').to_string();
+        return original_user_query
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
     }
 
     let final_query = query_components.join(" AND ");
-    log::info!("Constructed final ArXiv search query string: \"{}\"", final_query);
+    log::info!(
+        "Constructed final ArXiv search query string: \"{}\"",
+        final_query
+    );
     final_query
 }
 
 // --- ADDED: ArXiv Lookup Function ---
 async fn perform_arxiv_lookup(
-    client: &reqwest::Client, // ADDED: client parameter
+    client: &reqwest::Client,    // ADDED: client parameter
     search_query_string: String, // MODIFIED: Now accepts the raw query string
 ) -> Result<Vec<ArXivPaper>, String> {
-    log::info!("Performing ArXiv lookup with raw query string: '{}'", search_query_string);
+    log::info!(
+        "Performing ArXiv lookup with raw query string: '{}'",
+        search_query_string
+    );
 
     let max_results = 2;
     let base_url = "http://export.arxiv.org/api/query";
@@ -3305,9 +3463,7 @@ async fn perform_arxiv_lookup(
 
     let request_url = format!(
         "{}?search_query={}&start=0&max_results={}",
-        base_url,
-        encoded_query,
-        max_results
+        base_url, encoded_query, max_results
     );
 
     log::info!("Constructed ArXiv API request URL: {}", request_url);
@@ -3318,7 +3474,10 @@ async fn perform_arxiv_lookup(
             if status.is_success() {
                 match response.text().await {
                     Ok(xml_text) => {
-                        log::info!("Successfully fetched ArXiv XML response. Length: {}", xml_text.len());
+                        log::info!(
+                            "Successfully fetched ArXiv XML response. Length: {}",
+                            xml_text.len()
+                        );
                         // log::debug!("ArXiv XML Response:\n{}", xml_text); // Keep this commented for now unless debugging specific XML issues
 
                         match from_str::<ArxivFeed>(&xml_text) {
@@ -3333,14 +3492,18 @@ async fn perform_arxiv_lookup(
                                     let comments = entry.comment;
                                     let doi = entry.doi;
 
-                                    let authors: Vec<String> = entry.authors.into_iter()
+                                    let authors: Vec<String> = entry
+                                        .authors
+                                        .into_iter()
                                         .filter_map(|auth| auth.name)
                                         .collect();
 
                                     let mut pdf_url_option: Option<String> = None;
                                     for link in entry.links {
                                         // MODIFIED: Clone link.href for the first check to avoid move issues
-                                        if let (Some(href), Some(title_attr)) = (link.href.clone(), link.title) {
+                                        if let (Some(href), Some(title_attr)) =
+                                            (link.href.clone(), link.title)
+                                        {
                                             if title_attr == "pdf" {
                                                 pdf_url_option = Some(href);
                                                 break;
@@ -3349,20 +3512,35 @@ async fn perform_arxiv_lookup(
                                         // Fallback if title attribute is not present but rel="alternate" and type="application/pdf"
                                         // No change needed here as link.href was already being cloned for this path if the first path wasn't taken.
                                         // However, if the first path IS taken, link.href would have been moved if not for the clone above.
-                                        else if let (Some(href), Some(rel_attr), Some(type_attr)) = (link.href.clone(), link.rel, link.link_type) {
-                                            if rel_attr == "alternate" && type_attr == "application/pdf" {
+                                        else if let (
+                                            Some(href),
+                                            Some(rel_attr),
+                                            Some(type_attr),
+                                        ) = (link.href.clone(), link.rel, link.link_type)
+                                        {
+                                            if rel_attr == "alternate"
+                                                && type_attr == "application/pdf"
+                                            {
                                                 pdf_url_option = Some(href);
                                                 break;
                                             }
                                         }
                                     }
-                                    let pdf_url = pdf_url_option.unwrap_or_else(|| format!("http://arxiv.org/pdf/{}", paper_id.split('/').last().unwrap_or_default()));
+                                    let pdf_url = pdf_url_option.unwrap_or_else(|| {
+                                        format!(
+                                            "http://arxiv.org/pdf/{}",
+                                            paper_id.split('/').last().unwrap_or_default()
+                                        )
+                                    });
 
-                                    let categories: Vec<String> = entry.categories.into_iter()
+                                    let categories: Vec<String> = entry
+                                        .categories
+                                        .into_iter()
                                         .filter_map(|cat| cat.term)
                                         .collect();
 
-                                    let primary_category = entry.primary_category.and_then(|pc| pc.term);
+                                    let primary_category =
+                                        entry.primary_category.and_then(|pc| pc.term);
 
                                     // Note: arxiv_tools::Paper has more fields like `journal_ref`, `links` (which is a specific struct in arxiv_tools not just a string list).
                                     // We are populating the core ones. `links` in ArXivPaper is more for related links, not just the PDF.
@@ -3386,7 +3564,11 @@ async fn perform_arxiv_lookup(
                                 Ok(papers)
                             }
                             Err(e) => {
-                                log::error!("Failed to parse ArXiv XML: {}. XML was: {:.500}", e, xml_text);
+                                log::error!(
+                                    "Failed to parse ArXiv XML: {}. XML was: {:.500}",
+                                    e,
+                                    xml_text
+                                );
                                 Err(format!("Failed to parse ArXiv XML: {}", e))
                             }
                         }
@@ -3397,9 +3579,19 @@ async fn perform_arxiv_lookup(
                     }
                 }
             } else {
-                let error_text = response.text().await.unwrap_or_else(|_| "Could not read error body from ArXiv".to_string());
-                log::error!("ArXiv API request failed with status {}: {}", status, error_text);
-                Err(format!("ArXiv API request failed: {} - {}", status, error_text))
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body from ArXiv".to_string());
+                log::error!(
+                    "ArXiv API request failed with status {}: {}",
+                    status,
+                    error_text
+                );
+                Err(format!(
+                    "ArXiv API request failed: {} - {}",
+                    status, error_text
+                ))
             }
         }
         Err(e) => {

@@ -1,2 +1,4 @@
 .vscode/
 *.DS_Store
+internal.md
+src-tauri/icons/logo2*

@@ -230,23 +230,29 @@ body {
     box-sizing: border-box;
 }
 
+
+
 .input-wrapper {
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
     background-color: rgba(60, 60, 60, 0.95); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
-    padding: 5px 5px 5px 8px; /* Adjust padding T/R/B/L */
 }
 
 #input-image-preview {
-    width: 28px; /* Adjust size as needed */
-    height: 28px;
+    max-width: 120px; /* Maximum width constraint */
+    max-height: 80px; /* Maximum height constraint */
+    min-width: 28px; /* Minimum width to stay visible */
+    min-height: 20px; /* Minimum height to stay visible */
+    width: auto; /* Allow width to scale with aspect ratio */
+    height: auto; /* Allow height to scale with aspect ratio */
     border-radius: 4px;
     margin-right: 8px; /* Space between image and input */
-    object-fit: cover; /* Scale image nicely */
+    object-fit: contain; /* Maintain aspect ratio */
     background-color: rgba(0, 0, 0, 0.2); /* Placeholder bg */
     margin-top: 2px; /* Align better with first line of text */
+    border: 1px solid rgba(255, 255, 255, 0.1); /* Subtle border */
 }
 
 #input-image-preview.hidden {
@@ -691,6 +697,79 @@ body {
     color: rgba(255, 255, 255, 0.9); /* Slightly brighter than reasoning text */
 }
 
+/* OCR Accordion Styles */
+.ocr-accordion {
+    padding-top: 8px;
+}
+
+.ocr-accordion-toggle {
+    cursor: pointer;
+    font-size: 0.85em;
+    color: rgba(255, 255, 255, 0.6);
+    position: relative;
+    padding-left: 24px; /* Space for image icon */
+    outline: none; /* Remove focus outline */
+    transition: color 0.2s;
+    background: none;
+    border: none;
+    font-family: inherit;
+    text-align: left;
+    width: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.ocr-accordion-toggle:hover {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Image icon for OCR accordion */
+.ocr-accordion-toggle::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+}
+
+.ocr-content {
+    margin-top: 8px;
+    padding: 0 10px;
+    background-color: rgba(0, 0, 0, 0.15); /* Slightly different background */
+    border-radius: 8px;
+    font-size: 0.85em;
+    color: rgba(255, 255, 255, 0.75);
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out,
+        padding-top 0.3s ease-in-out,
+        padding-bottom 0.3s ease-in-out;
+}
+
+.ocr-content.open {
+    max-height: 300px;
+    opacity: 1;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    overflow-y: auto;
+}
+
+.ocr-content pre {
+    white-space: pre-wrap; /* Wrap long lines */
+    word-wrap: break-word; /* Break words if necessary */
+    margin: 0; /* Remove default pre margin */
+    font-family: inherit; /* Use same font */
+}
+
 /* Adjust thinking indicator styles slightly if needed */
 .message.thinking strong + .dots-container {
     display: inline-flex; /* Keep dots next to 'Shard' */
@@ -710,7 +789,7 @@ body {
     align-items: center; /* Align items vertically */
     gap: 10px;
     padding: 4px; /* Slightly reduce padding */
-    background-color: rgba(45, 45, 45, 1.0);
+    background-color: rgba(45, 45, 45, 1);
     border-radius: 25px;
     margin-top: auto;
     backdrop-filter: blur(10px);
@@ -724,6 +803,8 @@ body {
     flex-grow: 1; /* Allow wrapper to take available space */
     background-color: rgba(60, 60, 60, 0.9); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
+    padding: 5px 5px 5px 8px; /* Adjust padding T/R/B/L */
+    max-width: 100%;
 }
 
 #input-image-preview {
@@ -1065,24 +1146,26 @@ body.fade-out {
 
 .weather-lookup-status-container,
 .financial-data-status-container,
-.arxiv-lookup-status-container { /* ADDED for ArXiv */
-  background-color: transparent;
-  border-radius: 8px;
-  margin-bottom: 10px;
-  display: flex; /* Ensures icon and text are in a row */
-  align-items: center; /* Vertically aligns icon and text */
-  padding-left: 4px;
-  gap: 8px;
-  color: rgba(255, 255, 255, 0.7);
+.arxiv-lookup-status-container {
+    /* ADDED for ArXiv */
+    background-color: transparent;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    display: flex; /* Ensures icon and text are in a row */
+    align-items: center; /* Vertically aligns icon and text */
+    padding-left: 4px;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.7);
 }
 
 .article-lookup-status-text,
 .weather-lookup-status-text,
 .financial-data-status-text,
-.arxiv-lookup-status-text { /* ADDED for ArXiv */
-  font-size: 0.9em;
-  flex-grow: 1; /* Allows text to take available space */
-  line-height: 1.3; /* Adjust for better text flow if it wraps */
-  /* Potentially add a max-width if you want to control wrapping more explicitly, */
-  /* but flex-grow should handle it within the container. */
+.arxiv-lookup-status-text {
+    /* ADDED for ArXiv */
+    font-size: 0.9em;
+    flex-grow: 1; /* Allows text to take available space */
+    line-height: 1.3; /* Adjust for better text flow if it wraps */
+    /* Potentially add a max-width if you want to control wrapping more explicitly, */
+    /* but flex-grow should handle it within the container. */
 }

@@ -1,17 +1,17 @@
 # Shard
 
-A Tauri application for easy interaction with AI models. 
+A Tauri application for easy interaction with AI models.
 
-**Note:** Cmd (⌘) + Shift + Z is the shortcut to toggle visibility of Shard
+**Note:** Control (⌃) + Space is the shortcut to toggle visibility of Shard
 
 ## Features
 
 *   Chat Interface with Streamed Responses
 *   Free Models (DeepSeek V3, Gemini Flash, DeepSeek R1)
 *   API Key Management (OpenRouter & Google)
-*   **Screen Capture + OCR Analysis** (Requires Tesseract)
+*   Screen Capture + OCR Analysis (Requires Tesseract)
 *   Markdown & LaTeX Rendering
-*   Background Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
+*   Background Panel Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt
 *   Reasoning Data for R1 & Reasoning Summaries for Gemini
 *   Financial Data from Yahoo Finance
@@ -20,17 +20,11 @@ A Tauri application for easy interaction with AI models.
 *   Wikipedia Research Loop (up to 4 searches)
 *   Research Paper Data from ArXiv
 
-### In Progress Features
-
-*   YT Video Summarization (Idea 0.5.X 💡)
-*   Custom System Prompt (Idea 0.5.X 💡)
-*   Custom Keyboard Shortcut
-
 Feel free to add more ideas in the Issues or contribute to the project with a PR!
 
 ## IMPORTANT: Prerequisites
 
-For the **Screen Capture + OCR Analysis** feature to work, you **MUST** have Tesseract OCR installed on your system. The application uses the `rust-tesseract` crate, which relies on a system installation of Tesseract.
+For the OCR feature to work, you **MUST** have Tesseract OCR installed on your system. The application uses the `rust-tesseract` crate, which relies on a system installation of Tesseract.
 
 ### Installation Instructions
 

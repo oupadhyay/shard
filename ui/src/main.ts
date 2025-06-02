@@ -100,6 +100,13 @@ let currentTempScreenshotPath: string | null = null;
 let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold the div of the assistant's message being streamed
 let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
 let isAIResponding: boolean = false; // ADDED: Flag to track if AI is currently responding
+let responseCounter: number = 0; // ADDED: Simple counter to prevent stream cross-talk
+
+// Map to track message divs per response counter
+const responseDivMap = new Map<
+  number,
+  { messageDiv: HTMLDivElement; contentDiv: HTMLDivElement }
+>();
 
 // --- Helper function to preprocess LaTeX delimiters ---
 function preprocessLatex(content: string): string {
@@ -340,6 +347,7 @@ async function addMessageToHistory(
   sender: "You" | "Shard",
   content: string,
   reasoning: string | null = null,
+  ocrText: string | null = null,
 ) {
   console.log(
     `addMessageToHistory called. Sender: ${sender}, Content: ${content}, Reasoning: ${reasoning}`,
@@ -382,6 +390,17 @@ async function addMessageToHistory(
     messageDiv.appendChild(accordion); // Append to the user's message div
   }
 
+  // Add OCR accordion if OCR text is present for user messages
+  if (sender === "You" && ocrText) {
+    const ocrAccordion = ensureOcrAccordion(messageDiv);
+    const ocrContent = ocrAccordion.querySelector(".ocr-content div");
+    if (ocrContent) {
+      const pre = document.createElement("pre");
+      pre.textContent = ocrText;
+      ocrContent.appendChild(pre);
+    }
+  }
+
   // Add to chatMessageHistory AFTER it's been decided what to display
   // For streamed messages, this will be updated in STREAM_END
   if (
@@ -392,7 +411,12 @@ async function addMessageToHistory(
     // Add Shard messages only if it's not a streaming placeholder (which gets updated by STREAM_END)
     // This handles direct error messages from Shard added via addMessageToHistory.
     const role = sender === "You" ? "user" : "assistant";
-    chatMessageHistory.push({ role, content });
+    if (ocrText) {
+      let contentWithOcr = content + "\n\n OCR Text: " + ocrText;
+      chatMessageHistory.push({ role, content: contentWithOcr });
+    } else {
+      chatMessageHistory.push({ role, content });
+    }
   }
 
   // Add reasoning accordion if reasoning is present for assistant messages
@@ -434,11 +458,37 @@ function updateInputAreaForCapture() {
   }
 
   if (currentImageBase64) {
+    // Create a temporary image to get natural dimensions
+    const tempImg = new Image();
+    tempImg.onload = () => {
+      // Calculate appropriate display dimensions
+      const maxWidth = 120;
+      const maxHeight = 80;
+      const naturalWidth = tempImg.naturalWidth;
+      const naturalHeight = tempImg.naturalHeight;
+
+      // Calculate scale to fit within max dimensions while maintaining aspect ratio
+      const scaleX = maxWidth / naturalWidth;
+      const scaleY = maxHeight / naturalHeight;
+      const scale = Math.min(scaleX, scaleY, 1); // Don't scale up
+
+      const displayWidth = Math.round(naturalWidth * scale);
+      const displayHeight = Math.round(naturalHeight * scale);
+
+      // Apply calculated dimensions to the preview
+      inputImagePreview.style.width = `${displayWidth}px`;
+      inputImagePreview.style.height = `${displayHeight}px`;
+    };
+
     inputImagePreview.src = `data:image/png;base64,${currentImageBase64}`;
     inputImagePreview.classList.remove("hidden");
+    tempImg.src = `data:image/png;base64,${currentImageBase64}`;
   } else {
     inputImagePreview.src = "";
     inputImagePreview.classList.add("hidden");
+    // Reset dimensions
+    inputImagePreview.style.width = "";
+    inputImagePreview.style.height = "";
   }
 }
 
@@ -552,26 +602,35 @@ async function handleCaptureOcr() {
   } finally {
     updateInputAreaLayout(); // ADDED: Ensure layout is correct after input clear/reset
     updateInputAreaForCapture();
+    if (ocrIconContainer) ocrIconContainer.style.opacity = "1.0";
   }
 }
 
 // --- Send Message Handler ---
 async function handleSendMessage() {
+  // If AI is currently responding, finalize the current response before proceeding
   if (isAIResponding) {
-    console.log("handleSendMessage: AI is currently responding. New message blocked.");
-    return; // Prevent sending a new message while AI is responding
+    console.log(
+      "handleSendMessage: AI is responding. Finalizing current response before interjection.",
+    );
+    finalizeCurrentResponse();
   }
 
   let userTypedText = messageInput.value.trim();
-  let textToSend = userTypedText;
+  // let textToSend: string | null;
   let textToDisplay = userTypedText;
   let tempPathToClean: string | null = null; // Hold path for cleanup *after* sending
+  let tempOcrText: string | null = null; // Hold OCR text for accordion *before* clearing
 
   // Check if there's captured OCR text to prepend
   if (currentOcrText) {
-    const formattedOcr = `\n OCR Text: ${currentOcrText}`;
-    textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
-    textToDisplay = textToSend; // Display the combined text
+    // const formattedOcr = `\n OCR Text: ${currentOcrText}`;
+    // textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
+    // For display, show only user text or a placeholder if only OCR
+    textToDisplay = userTypedText || "[Screenshot captured]";
+
+    // Store OCR text before clearing for accordion creation
+    tempOcrText = currentOcrText;
 
     // Prepare state to be cleared AFTER successful send
     tempPathToClean = currentTempScreenshotPath;
@@ -590,7 +649,7 @@ async function handleSendMessage() {
   // However, addMessageToHistory ALREADY adds the user message to the visual chat
   // and to chatMessageHistory. So, the history is up-to-date.
 
-  addMessageToHistory("You", textToDisplay); // This will also add it to chatMessageHistory
+  addMessageToHistory("You", textToDisplay, null, tempOcrText); // This will also add it to chatMessageHistory
 
   // Optimistically resize window to maximum height expecting a potentially long response
 
@@ -614,9 +673,28 @@ async function handleSendMessage() {
     clearChatButton.classList.remove("hidden");
   }
 
+  // Clean up any leftover streaming dots from all responses before starting new one
+  console.log(`[DEBUG] Cleaning up leftover streaming dots before new response`);
+  responseDivMap.forEach((divs, counter) => {
+    const leftoverDots = divs.contentDiv.querySelectorAll(".streaming-dots");
+    if (leftoverDots.length > 0) {
+      console.log(
+        `[DEBUG] Found ${leftoverDots.length} leftover streaming dots in response ${counter}`,
+      );
+      leftoverDots.forEach((dots, index) => {
+        dots.remove();
+        console.log(
+          `[DEBUG] Removed leftover streaming dots ${index + 1} from response ${counter}`,
+        );
+      });
+    }
+  });
+
   // Show thinking indicator / initial placeholder for Shard's response
+  console.log(`[DEBUG] Creating new assistant message div for response ${responseCounter}`);
   const assistantMessagePlaceholder = document.createElement("div");
   assistantMessagePlaceholder.classList.add("message", "assistant", "streaming"); // New class for styling streamed message
+  assistantMessagePlaceholder.setAttribute("data-response-counter", responseCounter.toString());
   const senderStrong = document.createElement("strong");
   senderStrong.textContent = "Shard";
   assistantMessagePlaceholder.appendChild(senderStrong);
@@ -629,6 +707,22 @@ async function handleSendMessage() {
   assistantMessagePlaceholder.appendChild(currentAssistantContentDiv);
 
   currentAssistantMessageDiv = assistantMessagePlaceholder; // Store reference to the whole message
+  console.log(
+    `[DEBUG] Set currentAssistantMessageDiv for response ${responseCounter}, element:`,
+    currentAssistantMessageDiv,
+  );
+  console.log(
+    `[DEBUG] Set currentAssistantContentDiv for response ${responseCounter}, element:`,
+    currentAssistantContentDiv,
+  );
+
+  // Store in map for this specific response - increment counter first
+  responseCounter++; // Increment counter for new response
+  console.log(`[DEBUG] Starting new response with counter: ${responseCounter}`);
+  responseDivMap.set(responseCounter, {
+    messageDiv: assistantMessagePlaceholder,
+    contentDiv: currentAssistantContentDiv,
+  });
 
   if (chatHistory) {
     chatHistory.appendChild(assistantMessagePlaceholder);
@@ -636,6 +730,8 @@ async function handleSendMessage() {
   }
 
   isAIResponding = true; // Set flag as AI is about to respond
+  streamFinalized = false; // Reset stream finalized flag for new response
+  await setupStreamListeners(); // Re-setup listeners for new response counter
   try {
     // Invoke send_text_to_model. It no longer directly returns the message content.
     await core.invoke("send_text_to_model", {
@@ -716,6 +812,108 @@ function ensureReasoningAccordion(messageDiv: HTMLElement) {
   return reasoningAccordion;
 }
 
+function ensureOcrAccordion(messageDiv: HTMLElement) {
+  let ocrAccordion = messageDiv.querySelector(".ocr-accordion") as HTMLElement;
+
+  if (!ocrAccordion) {
+    const { accordion, toggle, content } = createCustomAccordion("OCR Text", "ocr");
+    toggle.setAttribute("aria-expanded", "false"); // Start closed
+    // content starts closed by default
+
+    const ocrDiv = document.createElement("div");
+    content.appendChild(ocrDiv);
+
+    ocrAccordion = accordion;
+
+    // Insert after message content but before reasoning accordion if it exists
+    const messageContent = messageDiv.querySelector(".message-content");
+    const reasoningAccordion = messageDiv.querySelector(".reasoning-accordion");
+
+    if (reasoningAccordion) {
+      messageDiv.insertBefore(ocrAccordion, reasoningAccordion);
+    } else if (messageContent && messageContent.nextSibling) {
+      messageDiv.insertBefore(ocrAccordion, messageContent.nextSibling);
+    } else {
+      messageDiv.appendChild(ocrAccordion);
+    }
+  }
+
+  return ocrAccordion;
+}
+
+// Function to finalize current AI response when interjected
+function finalizeCurrentResponse() {
+  if (currentAssistantMessageDiv && currentAssistantContentDiv && isAIResponding) {
+    console.log("Finalizing current AI response due to interjection");
+    console.log(
+      `[DEBUG] Finalizing response ${responseCounter}, currentAssistantContentDiv content: "${currentAssistantContentDiv.textContent}"`,
+    );
+
+    // Signal backend to cancel current stream
+    core.invoke("cancel_current_stream").catch((error) => {
+      console.warn("Failed to cancel backend stream:", error);
+    });
+
+    // Get the current response's content div
+    const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+
+    // Get the current content that was streamed so far
+    const currentContent = currentResponseContentDiv?.textContent || "";
+
+    // ALWAYS add an assistant message to chat history to maintain conversation flow
+    // This prevents consecutive user messages which confuse the model
+    const interruptedContent = currentContent.trim()
+      ? currentContent + " [interrupted]"
+      : "[interrupted]";
+
+    chatMessageHistory.push({
+      role: "assistant",
+      content: interruptedContent,
+    });
+
+    // Remove thinking indicator if present
+    if (currentAssistantMessageDiv.classList.contains("thinking")) {
+      currentAssistantMessageDiv.classList.remove("thinking");
+      const dotsContainer = currentAssistantMessageDiv.querySelector(".dots-container");
+      if (dotsContainer) {
+        dotsContainer.remove();
+      }
+    }
+
+    // Remove ALL streaming dots from the current response's content div
+    if (currentResponseContentDiv) {
+      const allStreamingDots = currentResponseContentDiv.querySelectorAll(".streaming-dots");
+      console.log(`[DEBUG] Finalizing: Found ${allStreamingDots.length} streaming dots to remove`);
+      allStreamingDots.forEach((dots, index) => {
+        dots.remove();
+        console.log(`[DEBUG] Finalizing: Removed streaming dots ${index + 1}`);
+      });
+
+      // Add "[interrupted]" indicator to show the response was cut off
+      const interruptedIndicator = document.createElement("span");
+      interruptedIndicator.textContent = " [interrupted]";
+      interruptedIndicator.style.color = "rgba(255, 255, 255, 0.5)";
+      interruptedIndicator.style.fontSize = "0.85em";
+      currentResponseContentDiv.appendChild(interruptedIndicator);
+    }
+
+    // Reset streaming state but keep the response div map intact
+    console.log(
+      `[DEBUG] Resetting streaming state - setting currentAssistantMessageDiv and currentAssistantContentDiv to null`,
+    );
+    currentAssistantMessageDiv = null;
+    currentAssistantContentDiv = null;
+    isAIResponding = false;
+
+    // Clear any pending stream buffers and animation state
+    streamDeltaBuffer = "";
+    if (streamAnimationFrameRequested) {
+      streamAnimationFrameRequested = false;
+    }
+    streamFinalized = false; // Reset for next response
+  }
+}
+
 // Define interfaces for stream payloads
 interface StreamChunkPayload {
   content?: string | null;
@@ -745,6 +943,7 @@ let unlistenArxivLookupCompleted: (() => void) | null = null; // ADDED
 // Buffer and flag for batched animation of stream chunks
 let streamDeltaBuffer = "";
 let streamAnimationFrameRequested = false;
+let streamFinalized = false; // Flag to prevent further modifications after STREAM_END
 
 const MAX_SUB_CHUNK_LENGTH = 70;
 const SUB_CHUNK_ANIMATION_DELAY = 50;
@@ -916,16 +1115,36 @@ interface ArxivLookupCompletedPayload {
 
 async function setupStreamListeners() {
   if (unlistenStreamChunk) unlistenStreamChunk();
+  const listenerResponseCounter = responseCounter; // Capture current response counter
+  console.log(
+    `[DEBUG] Setting up stream listeners for response counter: ${listenerResponseCounter}`,
+  );
   unlistenStreamChunk = await listen<StreamChunkPayload>("STREAM_CHUNK", (event) => {
+    console.log(
+      `[DEBUG] STREAM_CHUNK received - listener counter: ${listenerResponseCounter}, current counter: ${responseCounter}, content: "${event.payload.content}"`,
+    );
+
+    // Get the content div for this specific response
+    const responseDivs = responseDivMap.get(listenerResponseCounter);
+    const responseContentDiv = responseDivs?.contentDiv;
+    console.log(
+      `[DEBUG] responseContentDiv exists for counter ${listenerResponseCounter}:`,
+      !!responseContentDiv,
+    );
+
+    // Always process events for their own response, don't ignore based on counter mismatch
+    // This allows cancelled streams to still update their own message divs
+
     // Handle content from the new payload structure
-    if (event.payload.content) {
+    if (event.payload.content && responseContentDiv) {
       streamDeltaBuffer += event.payload.content;
+      console.log(`[DEBUG] Added to streamDeltaBuffer, total length: ${streamDeltaBuffer.length}`);
     }
 
     // Handle reasoning data
-    if (event.payload.reasoning && currentAssistantMessageDiv) {
-      ensureReasoningAccordion(currentAssistantMessageDiv);
-      const reasoningAccordion = currentAssistantMessageDiv.querySelector(".reasoning-accordion");
+    if (event.payload.reasoning && responseDivs?.messageDiv) {
+      ensureReasoningAccordion(responseDivs.messageDiv);
+      const reasoningAccordion = responseDivs.messageDiv.querySelector(".reasoning-accordion");
       const reasoningContent = reasoningAccordion?.querySelector(".reasoning-content div");
       if (reasoningContent) {
         const currentContent = reasoningContent.getAttribute("data-raw-content") || "";
@@ -935,11 +1154,11 @@ async function setupStreamListeners() {
       }
     }
 
-    if (!streamAnimationFrameRequested && currentAssistantContentDiv) {
+    if (!streamAnimationFrameRequested && responseContentDiv && !streamFinalized) {
       streamAnimationFrameRequested = true;
       requestAnimationFrame(() => {
-        if (!currentAssistantContentDiv) {
-          // Double check in case it became null
+        if (!responseContentDiv || streamFinalized) {
+          // Double check in case it became null or stream was finalized
           streamAnimationFrameRequested = false;
           streamDeltaBuffer = ""; // Clear buffer if no target
           return;
@@ -952,20 +1171,20 @@ async function setupStreamListeners() {
         if (currentBatchText) {
           // The initial display is now also .streaming-dots, so this specific check for "dots-container" is less critical
           // but the general logic of removing dots before adding text is sound.
-          if (currentAssistantContentDiv.innerHTML.includes("dots-container")) {
+          if (responseContentDiv.innerHTML.includes("dots-container")) {
             // This will likely be false now
-            currentAssistantContentDiv.innerHTML = ""; // Clear initial thinking dots (if they were the old style)
+            responseContentDiv.innerHTML = ""; // Clear initial thinking dots (if they were the old style)
           }
 
           // Remove any existing streaming dots before adding new text
-          const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+          const existingDots = responseContentDiv.querySelector(".streaming-dots");
           if (existingDots) {
             existingDots.remove();
           }
 
           // Function to animate text piece by piece
           function animateTextSequentially(textToProcess: string) {
-            if (!textToProcess || !currentAssistantContentDiv) return;
+            if (!textToProcess || !responseContentDiv || streamFinalized) return;
 
             const subChunk = textToProcess.substring(0, MAX_SUB_CHUNK_LENGTH);
             const remainingText = textToProcess.substring(MAX_SUB_CHUNK_LENGTH);
@@ -974,7 +1193,7 @@ async function setupStreamListeners() {
             newSpan.innerHTML = md.renderInline(preprocessLatex(subChunk)); // Render this piece with preprocessing
             newSpan.style.opacity = "0";
             newSpan.style.transition = "opacity 0.3s ease-out";
-            currentAssistantContentDiv.appendChild(newSpan);
+            responseContentDiv.appendChild(newSpan);
 
             requestAnimationFrame(() => {
               // Fade in this piece
@@ -985,31 +1204,31 @@ async function setupStreamListeners() {
               chatHistory.scrollTop = chatHistory.scrollHeight;
             }
 
-            if (remainingText) {
+            if (remainingText && !streamFinalized) {
               setTimeout(() => {
                 animateTextSequentially(remainingText);
               }, SUB_CHUNK_ANIMATION_DELAY);
-            } else {
+            } else if (!streamFinalized) {
               // Append streaming dots after the last sub-chunk is animated
-              if (currentAssistantContentDiv) {
-                currentAssistantContentDiv.appendChild(getStreamingDots());
+              if (responseContentDiv) {
+                responseContentDiv.appendChild(getStreamingDots());
                 if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight; // Scroll again after adding dots
               }
             }
           }
           animateTextSequentially(currentBatchText); // Start processing the batch
         } else if (
-          currentAssistantContentDiv.innerHTML !== "" &&
-          !currentAssistantContentDiv.querySelector(".streaming-dots")
+          responseContentDiv.innerHTML !== "" &&
+          !responseContentDiv.querySelector(".streaming-dots")
         ) {
           // If buffer was empty but there's content and no dots, add dots (e.g. after clearing initial dots)
-          currentAssistantContentDiv.appendChild(getStreamingDots());
+          responseContentDiv.appendChild(getStreamingDots());
           if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
         }
       });
-    } else if (!currentAssistantContentDiv && streamDeltaBuffer) {
+    } else if (!responseContentDiv && streamDeltaBuffer) {
       console.warn(
-        "STREAM_CHUNK: currentAssistantContentDiv is null, but deltaBuffer has content:",
+        "STREAM_CHUNK: responseContentDiv is null, but deltaBuffer has content:",
         streamDeltaBuffer,
       );
       streamDeltaBuffer = "";
@@ -1022,20 +1241,21 @@ async function setupStreamListeners() {
     "ARTICLE_LOOKUP_STARTED",
     (event) => {
       console.log("ARTICLE_LOOKUP_STARTED received:", event.payload);
-      if (currentAssistantContentDiv) {
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
         // Remove any previous article lookup status ONLY
-        const existingStatus = currentAssistantContentDiv.querySelector(
+        const existingStatus = currentResponseContentDiv.querySelector(
           ".article-lookup-status-container",
         );
         if (existingStatus) {
           existingStatus.remove();
         }
         // Also remove general streaming dots if they are the only thing
-        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+        const existingDots = currentResponseContentDiv.querySelector(".streaming-dots");
         if (
           existingDots &&
-          currentAssistantContentDiv.children.length === 1 &&
-          currentAssistantContentDiv.firstChild === existingDots
+          currentResponseContentDiv.children.length === 1 &&
+          currentResponseContentDiv.firstChild === existingDots
         ) {
           existingDots.remove();
         }
@@ -1052,10 +1272,9 @@ async function setupStreamListeners() {
         statusText.classList.add("article-lookup-status-text");
         lookupStatusDiv.appendChild(statusText);
 
-        // Prepend the new status
-        currentAssistantContentDiv.insertBefore(
+        currentResponseContentDiv.insertBefore(
           lookupStatusDiv,
-          currentAssistantContentDiv.firstChild,
+          currentResponseContentDiv.firstChild,
         );
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
@@ -1067,8 +1286,9 @@ async function setupStreamListeners() {
     "ARTICLE_LOOKUP_COMPLETED",
     (event) => {
       console.log("ARTICLE_LOOKUP_COMPLETED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const searchingStatusContainer = currentAssistantContentDiv.querySelector(
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
+        const searchingStatusContainer = currentResponseContentDiv.querySelector(
           ".article-lookup-status-container",
         );
         if (searchingStatusContainer) {
@@ -1150,18 +1370,18 @@ async function setupStreamListeners() {
             searchContentDiv.appendChild(summaryDiv);
           }
 
-          currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+          currentResponseContentDiv.insertBefore(accordion, currentResponseContentDiv.firstChild);
         } else if (event.payload.error) {
           console.error("Article lookup failed:", event.payload.error);
         }
 
         if (
-          currentAssistantContentDiv.innerHTML === "" ||
+          currentResponseContentDiv.innerHTML === "" ||
           (event.payload.success &&
-            currentAssistantContentDiv.children.length === 1 &&
-            currentAssistantContentDiv.querySelector(".web-search-accordion"))
+            currentResponseContentDiv.children.length === 1 &&
+            currentResponseContentDiv.querySelector(".web-search-accordion"))
         ) {
-          currentAssistantContentDiv.appendChild(getStreamingDots());
+          currentResponseContentDiv.appendChild(getStreamingDots());
         }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
@@ -1173,20 +1393,21 @@ async function setupStreamListeners() {
     "FINANCIAL_DATA_STARTED",
     (event) => {
       console.log("FINANCIAL_DATA_STARTED received:", event.payload);
-      if (currentAssistantContentDiv) {
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
         // Remove any previous financial data status ONLY
-        const existingStatus = currentAssistantContentDiv.querySelector(
+        const existingStatus = currentResponseContentDiv.querySelector(
           ".financial-data-status-container",
         );
         if (existingStatus) {
           existingStatus.remove();
         }
         // Also remove general streaming dots if they are the only thing
-        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+        const existingDots = currentResponseContentDiv.querySelector(".streaming-dots");
         if (
           existingDots &&
-          currentAssistantContentDiv.children.length === 1 &&
-          currentAssistantContentDiv.firstChild === existingDots
+          currentResponseContentDiv.children.length === 1 &&
+          currentResponseContentDiv.firstChild === existingDots
         ) {
           existingDots.remove();
         }
@@ -1204,7 +1425,7 @@ async function setupStreamListeners() {
         statusDiv.appendChild(statusText);
 
         // Prepend the new status
-        currentAssistantContentDiv.insertBefore(statusDiv, currentAssistantContentDiv.firstChild);
+        currentResponseContentDiv.insertBefore(statusDiv, currentResponseContentDiv.firstChild);
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
     },
@@ -1215,8 +1436,9 @@ async function setupStreamListeners() {
     "FINANCIAL_DATA_COMPLETED",
     (event) => {
       console.log("FINANCIAL_DATA_COMPLETED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const fetchingStatusContainer = currentAssistantContentDiv.querySelector(
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
+        const fetchingStatusContainer = currentResponseContentDiv.querySelector(
           ".financial-data-status-container",
         );
         if (fetchingStatusContainer) {
@@ -1268,18 +1490,18 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+        currentResponseContentDiv.insertBefore(accordion, currentResponseContentDiv.firstChild);
 
         // Ensure streaming dots are present if no other content is being streamed by the LLM yet
         if (
-          !currentAssistantContentDiv.querySelector(".streaming-dots") &&
-          (currentAssistantContentDiv.innerHTML === "" || // Empty
-            (currentAssistantContentDiv.children.length > 0 && // Only has accordions/tool messages
-              currentAssistantContentDiv.querySelectorAll(
+          !currentResponseContentDiv.querySelector(".streaming-dots") &&
+          (currentResponseContentDiv.innerHTML === "" || // Empty
+            (currentResponseContentDiv.children.length > 0 && // Only has accordions/tool messages
+              currentResponseContentDiv.querySelectorAll(
                 ":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)",
               ).length === 0))
         ) {
-          currentAssistantContentDiv.appendChild(getStreamingDots());
+          currentResponseContentDiv.appendChild(getStreamingDots());
         }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
@@ -1288,63 +1510,100 @@ async function setupStreamListeners() {
 
   if (unlistenStreamEnd) unlistenStreamEnd();
   unlistenStreamEnd = await listen<StreamEndPayload>("STREAM_END", async (event) => {
+    console.log(
+      `[DEBUG] STREAM_END received - listener counter: ${listenerResponseCounter}, current counter: ${responseCounter}`,
+    );
+    console.log(`[DEBUG] STREAM_END content: "${event.payload.full_content}"`);
+
+    // Get the divs for this specific response
+    const responseDivs = responseDivMap.get(listenerResponseCounter);
+    const responseMessageDiv = responseDivs?.messageDiv;
+    const responseContentDiv = responseDivs?.contentDiv;
+
+    console.log(
+      `[DEBUG] responseMessageDiv exists for counter ${listenerResponseCounter}:`,
+      !!responseMessageDiv,
+    );
+    console.log(
+      `[DEBUG] responseContentDiv exists for counter ${listenerResponseCounter}:`,
+      !!responseContentDiv,
+    );
+
     console.log("STREAM_END received:", event.payload);
-    if (currentAssistantMessageDiv && currentAssistantContentDiv) {
-      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
-      if (existingDots) {
-        existingDots.remove();
-      }
+    console.log(`[DEBUG] responseDivs from map:`, responseDivs);
+    console.log(`[DEBUG] Available response counters in map:`, Array.from(responseDivMap.keys()));
+
+    if (responseMessageDiv && responseContentDiv) {
+      // Remove ALL streaming dots from this response's content div
+      const allStreamingDots = responseContentDiv.querySelectorAll(".streaming-dots");
+      console.log(`[DEBUG] Found ${allStreamingDots.length} streaming dots to remove`);
+      allStreamingDots.forEach((dots, index) => {
+        dots.remove();
+        console.log(
+          `[DEBUG] Removed streaming dots ${index + 1} from response ${listenerResponseCounter}`,
+        );
+      });
 
       // Guard the DOM operations specifically
-      if (currentAssistantContentDiv) {
+      if (responseContentDiv) {
+        // First, save any accordions that might be present
         const accordions: { element: HTMLElement; type: string }[] = [];
-        currentAssistantContentDiv
-          .querySelectorAll(".web-search-accordion")
-          .forEach((accordionNode) => {
-            const accordionElement = accordionNode as HTMLElement;
-            let type = "article";
-            if (accordionElement.querySelector(".weather-info-text")) type = "weather";
-            else if (accordionElement.querySelector(".financial-data-text")) type = "financial";
-            else if (accordionElement.querySelector(".arxiv-paper-summary")) type = "arxiv"; // ADDED for ArXiv
-            accordions.push({
-              element: accordionElement,
-              type: type,
-            });
-            accordionElement.remove();
+        responseContentDiv.querySelectorAll(".web-search-accordion").forEach((accordionNode) => {
+          const accordionElement = accordionNode as HTMLElement;
+          let type = "article";
+          if (accordionElement.querySelector(".weather-info-text")) type = "weather";
+          else if (accordionElement.querySelector(".financial-data-text")) type = "financial";
+          else if (accordionElement.querySelector(".arxiv-paper-summary")) type = "arxiv"; // ADDED for ArXiv
+          accordions.push({
+            element: accordionElement,
+            type: type,
           });
+          accordionElement.remove();
+        });
 
-        // Ensure currentAssistantContentDiv is still valid before writing to innerHTML
-        if (currentAssistantContentDiv) {
-          try {
-            currentAssistantContentDiv.innerHTML = md.render(
-              preprocessLatex(event.payload.full_content),
-            );
-          } catch (e) {
-            console.error("Error rendering markdown for main content:", e);
-            currentAssistantContentDiv.textContent = event.payload.full_content;
-          }
+        // Clear the entire content div to remove any animated spans and streaming dots
+        console.log(`[DEBUG] Clearing all content from response div before setting final content`);
+        responseContentDiv.innerHTML = "";
+
+        // Stop any ongoing stream animations by clearing the buffer and canceling animation frames
+        console.log(`[DEBUG] Stopping animations for response ${listenerResponseCounter}`);
+        streamDeltaBuffer = "";
+        streamAnimationFrameRequested = false;
+        streamFinalized = true; // Prevent any further modifications
+
+        // Also clear any pending timeouts that might be adding more animated spans
+        // (This is a safety measure since we can't easily track timeout IDs)
+        console.log(`[DEBUG] Animation state cleared and stream finalized`);
+
+        // Now set the final content
+        try {
+          responseContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content));
+          console.log(`[DEBUG] Set final content for response ${listenerResponseCounter}`);
+        } catch (e) {
+          console.error("Error rendering markdown for main content:", e);
+          responseContentDiv.textContent = event.payload.full_content;
         }
 
         // And again before inserting DOM elements
-        if (currentAssistantContentDiv) {
+        if (responseContentDiv) {
           const order = ["article", "weather", "financial", "arxiv"]; // ADDED "arxiv" to order
           order.forEach((type) => {
             const accordionToPrepend = accordions.find((a) => a.type === type);
-            if (accordionToPrepend && currentAssistantContentDiv) {
-              currentAssistantContentDiv.insertBefore(
+            if (accordionToPrepend && responseContentDiv) {
+              responseContentDiv.insertBefore(
                 accordionToPrepend.element,
-                currentAssistantContentDiv.firstChild,
+                responseContentDiv.firstChild,
               );
             }
           });
         }
       }
 
-      currentAssistantMessageDiv.classList.remove("streaming");
+      responseMessageDiv.classList.remove("streaming");
 
       // Handle reasoning accordion state at the end of the stream
-      console.log("STREAM_END: currentAssistantMessageDiv:", currentAssistantMessageDiv);
-      let reasoningAccordion = currentAssistantMessageDiv.querySelector(
+      console.log("STREAM_END: responseMessageDiv:", responseMessageDiv);
+      let reasoningAccordion = responseMessageDiv.querySelector(
         ".reasoning-accordion",
       ) as HTMLElement;
       console.log("STREAM_END: Found reasoningAccordion:", reasoningAccordion);
@@ -1366,7 +1625,7 @@ async function setupStreamListeners() {
           const reasoningDiv = document.createElement("div");
           content.appendChild(reasoningDiv);
           reasoningAccordion = accordion;
-          currentAssistantMessageDiv.appendChild(reasoningAccordion);
+          responseMessageDiv.appendChild(reasoningAccordion);
         }
 
         // Update existing or newly created reasoning accordion with final content
@@ -1419,31 +1678,69 @@ async function setupStreamListeners() {
         // We should add to chatMessageHistory here, at the END.
         chatMessageHistory.push({ role: "assistant", content: event.payload.full_content });
       }
+    } else {
+      // Fallback: if we can't find the specific response div, try to remove streaming dots from current global div
+      console.log(
+        `[DEBUG] No response divs found for counter ${listenerResponseCounter}, trying fallback cleanup`,
+      );
+      if (currentAssistantContentDiv) {
+        const allFallbackDots = currentAssistantContentDiv.querySelectorAll(".streaming-dots");
+        console.log(`[DEBUG] Found ${allFallbackDots.length} streaming dots in fallback cleanup`);
+        allFallbackDots.forEach((dots, index) => {
+          dots.remove();
+          console.log(`[DEBUG] Removed fallback streaming dots ${index + 1}`);
+        });
+      }
+
+      // Also try to clean up streaming dots from ALL response divs as a last resort
+      console.log(`[DEBUG] Cleaning up streaming dots from all response divs`);
+      responseDivMap.forEach((divs, counter) => {
+        const allDots = divs.contentDiv.querySelectorAll(".streaming-dots");
+        if (allDots.length > 0) {
+          console.log(`[DEBUG] Found ${allDots.length} streaming dots in response ${counter}`);
+          allDots.forEach((dots, index) => {
+            dots.remove();
+            console.log(`[DEBUG] Removed streaming dots ${index + 1} from response ${counter}`);
+          });
+        }
+      });
     }
     if (messageInput) {
       messageInput.disabled = false; // This now means "allow sending again"
       // messageInput.focus();
     }
-    currentAssistantMessageDiv = null;
-    currentAssistantContentDiv = null;
-    isAIResponding = false; // Reset flag as AI has finished responding
+
+    // Only clear global state if this is the current active response
+    if (listenerResponseCounter === responseCounter) {
+      currentAssistantMessageDiv = null;
+      currentAssistantContentDiv = null;
+      isAIResponding = false; // Reset flag as AI has finished responding
+    }
+
     if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
   });
 
   if (unlistenStreamError) unlistenStreamError();
   unlistenStreamError = await listen<StreamErrorPayload>("STREAM_ERROR", (event) => {
+    // Ignore events if this listener is not for the current response
+    if (listenerResponseCounter !== responseCounter) {
+      return;
+    }
+
     console.error("STREAM_ERROR received:", event.payload);
-    if (currentAssistantMessageDiv && currentAssistantContentDiv) {
+    const responseDivs = responseDivMap.get(listenerResponseCounter);
+    const responseMessageDiv = responseDivs?.messageDiv;
+    const responseContentDiv = responseDivs?.contentDiv;
+
+    if (responseMessageDiv && responseContentDiv) {
       // Remove streaming dots before setting error content
-      const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+      const existingDots = responseContentDiv.querySelector(".streaming-dots");
       if (existingDots) {
         existingDots.remove();
       }
-      currentAssistantContentDiv.innerHTML = md.render(
-        preprocessLatex(`Error: ${event.payload.error}`),
-      ); // Preprocess LaTeX
-      currentAssistantMessageDiv.classList.remove("streaming");
-      currentAssistantMessageDiv.classList.add("error"); // Optional: add error class for styling
+      responseContentDiv.innerHTML = md.render(preprocessLatex(`Error: ${event.payload.error}`)); // Preprocess LaTeX
+      responseMessageDiv.classList.remove("streaming");
+      responseMessageDiv.classList.add("error"); // Optional: add error class for styling
     } else {
       // If no placeholder, add a new message for the error
       addMessageToHistory("Shard", `Error: ${event.payload.error}`);
@@ -1452,9 +1749,13 @@ async function setupStreamListeners() {
       messageInput.disabled = false; // This now means "allow sending again"
       // messageInput.focus();
     }
-    currentAssistantMessageDiv = null;
-    currentAssistantContentDiv = null;
-    isAIResponding = false; // Reset flag on stream error
+
+    // Only clear global state if this is the current active response
+    if (listenerResponseCounter === responseCounter) {
+      currentAssistantMessageDiv = null;
+      currentAssistantContentDiv = null;
+      isAIResponding = false; // Reset flag on stream error
+    }
   });
 
   // --- WEATHER LOOKUP LISTENERS ---
@@ -1463,19 +1764,22 @@ async function setupStreamListeners() {
     "WEATHER_LOOKUP_STARTED",
     (event) => {
       console.log("WEATHER_LOOKUP_STARTED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const existingStatus = currentAssistantContentDiv.querySelector(
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
+        const existingStatus = currentResponseContentDiv.querySelector(
           ".weather-lookup-status-container",
         );
         if (existingStatus) existingStatus.remove();
 
-        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+        const existingDots = currentAssistantContentDiv?.querySelector(".streaming-dots");
         if (
-          existingDots &&
+          currentAssistantContentDiv &&
+          currentAssistantContentDiv.querySelector(".streaming-dots") &&
           currentAssistantContentDiv.children.length === 1 &&
           currentAssistantContentDiv.firstChild === existingDots
         ) {
-          existingDots.remove();
+          const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
+          existingDots?.remove();
         }
 
         const lookupStatusDiv = document.createElement("div");
@@ -1490,10 +1794,12 @@ async function setupStreamListeners() {
         statusText.classList.add("weather-lookup-status-text");
         lookupStatusDiv.appendChild(statusText);
 
-        currentAssistantContentDiv.insertBefore(
-          lookupStatusDiv,
-          currentAssistantContentDiv.firstChild,
-        );
+        if (currentAssistantContentDiv) {
+          currentAssistantContentDiv.insertBefore(
+            lookupStatusDiv,
+            currentAssistantContentDiv.firstChild,
+          );
+        }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
     },
@@ -1504,8 +1810,9 @@ async function setupStreamListeners() {
     "WEATHER_LOOKUP_COMPLETED",
     (event) => {
       console.log("WEATHER_LOOKUP_COMPLETED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const statusContainer = currentAssistantContentDiv.querySelector(
+      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      if (currentResponseContentDiv) {
+        const statusContainer = currentResponseContentDiv.querySelector(
           ".weather-lookup-status-container",
         );
         if (statusContainer) statusContainer.remove();
@@ -1568,10 +1875,13 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+        if (currentAssistantContentDiv) {
+          currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+        }
 
         // Ensure streaming dots are present if no other content is being streamed by the LLM yet
         if (
+          currentAssistantContentDiv &&
           !currentAssistantContentDiv.querySelector(".streaming-dots") &&
           (currentAssistantContentDiv.innerHTML === "" || // Empty
             (currentAssistantContentDiv.children.length > 0 && // Only has accordions/tool messages
@@ -1940,7 +2250,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     messageInput.addEventListener("input", autoResizeTextarea);
 
     messageInput.addEventListener("keypress", (event) => {
-      if (event.key === "Enter" && !event.shiftKey && !isAIResponding) {
+      if (event.key === "Enter" && !event.shiftKey) {
         // Allow Shift+Enter for newlines if desired
         event.preventDefault(); // Prevent default Enter behavior (like adding newline)
         handleSendMessage();
@@ -2074,20 +2384,37 @@ console.log("Frontend listener for toggle-main-window set up.");
 // Custom accordion helper functions
 function createCustomAccordion(
   title: string,
-  type: "reasoning" | "web-search" | "arxiv-search", // ADDED "arxiv-search"
+  type: "reasoning" | "web-search" | "arxiv-search" | "ocr", // ADDED "arxiv-search" and "ocr"
 ): { accordion: HTMLElement; toggle: HTMLButtonElement; content: HTMLElement } {
   const accordion = document.createElement("div");
-  accordion.className = type === "reasoning" ? "reasoning-accordion" : "web-search-accordion"; // Keep general class for web-search style
+  if (type === "reasoning") {
+    accordion.className = "reasoning-accordion";
+  } else if (type === "ocr") {
+    accordion.className = "ocr-accordion";
+  } else {
+    accordion.className = "web-search-accordion"; // Keep general class for web-search style
+  }
 
   const toggle = document.createElement("button");
-  toggle.className =
-    type === "reasoning" ? "reasoning-accordion-toggle" : "web-search-accordion-toggle";
+  if (type === "reasoning") {
+    toggle.className = "reasoning-accordion-toggle";
+  } else if (type === "ocr") {
+    toggle.className = "ocr-accordion-toggle";
+  } else {
+    toggle.className = "web-search-accordion-toggle";
+  }
   toggle.setAttribute("aria-expanded", "false");
   toggle.setAttribute("aria-controls", `${type}-content-${Date.now()}`); // Use type in ID
   toggle.textContent = title;
 
   const content = document.createElement("div");
-  content.className = type === "reasoning" ? "reasoning-content" : "web-search-content"; // Keep general class
+  if (type === "reasoning") {
+    content.className = "reasoning-content";
+  } else if (type === "ocr") {
+    content.className = "ocr-content";
+  } else {
+    content.className = "web-search-content"; // Keep general class
+  }
   content.id = toggle.getAttribute("aria-controls")!;
   content.setAttribute("role", "region");
   content.setAttribute("aria-labelledby", toggle.id || "");

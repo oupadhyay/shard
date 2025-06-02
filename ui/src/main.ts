@@ -78,6 +78,8 @@ interface CaptureResult {
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  image_base64_data?: string | null;
+  image_mime_type?: string | null;
 }
 
 // --- System Instruction (matches backend) ---
@@ -329,7 +331,7 @@ function updateInputAreaLayout() {
     const totalFixedBottomHeight =
       inputAreaHeight + toolButtonsHeight + gapBetweenToolButtonsAndInput;
 
-    const baseChatHistorySpacing = 15; // Base spacing above the topmost fixed element
+    const baseChatHistorySpacing = 10; // Base spacing above the topmost fixed element
     chatHistoryEl.style.paddingBottom = `${totalFixedBottomHeight + baseChatHistorySpacing}px`;
 
     chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
@@ -348,9 +350,10 @@ async function addMessageToHistory(
   content: string,
   reasoning: string | null = null,
   ocrText: string | null = null,
+  imageData?: { base64: string; mime: string } | null,
 ) {
   console.log(
-    `addMessageToHistory called. Sender: ${sender}, Content: ${content}, Reasoning: ${reasoning}`,
+    `addMessageToHistory called. Sender: ${sender}, Content: ${content}, Reasoning: ${reasoning}, OCR: ${!!ocrText}, Image: ${!!imageData}`,
   );
   const messageDiv = document.createElement("div");
   messageDiv.classList.add("message");
@@ -380,24 +383,54 @@ async function addMessageToHistory(
 
   // ADDED: Check if this is the first USER message to show System Prompt
   if (sender === "You" && chatMessageHistory.length === 0) {
-    const { accordion, content } = createCustomAccordion("Show System Prompt", "reasoning");
+    const { accordion, content: sysPromptContent } = createCustomAccordion("Show System Prompt", "reasoning");
     accordion.style.marginTop = "10px"; // Add some space above the accordion
 
     const pre = document.createElement("pre");
     pre.textContent = SYSTEM_INSTRUCTION;
-    content.appendChild(pre);
+    sysPromptContent.appendChild(pre);
 
     messageDiv.appendChild(accordion); // Append to the user's message div
   }
 
-  // Add OCR accordion if OCR text is present for user messages
-  if (sender === "You" && ocrText) {
-    const ocrAccordion = ensureOcrAccordion(messageDiv);
-    const ocrContent = ocrAccordion.querySelector(".ocr-content div");
-    if (ocrContent) {
-      const pre = document.createElement("pre");
-      pre.textContent = ocrText;
-      ocrContent.appendChild(pre);
+  // For user messages: Add Image Accordion if image is present (for Gemini), otherwise OCR Accordion if OCR is present
+  if (sender === "You") {
+    const selectedModel = modelSelect?.value || ""; // Get current model
+
+    if (imageData) { // Image was captured
+      if (selectedModel.startsWith("gemini-")) { // Gemini model selected
+        const imageAccordion = ensureImageAccordion(messageDiv); // New function
+        const imageContentDiv = imageAccordion.querySelector(".image-preview-content div");
+        if (imageContentDiv) {
+          const imgElement = document.createElement("img");
+          imgElement.src = `data:${imageData.mime};base64,${imageData.base64}`;
+          imgElement.alt = "User uploaded image";
+          imgElement.style.maxWidth = "100%"; // Make image responsive within accordion
+          imgElement.style.maxHeight = "300px"; // Max height for the preview
+          imgElement.style.borderRadius = "4px";
+          imgElement.style.objectFit = "contain";
+          imageContentDiv.appendChild(imgElement);
+        }
+      } else { // Non-Gemini (OpenRouter) model selected, but image was captured
+        if (ocrText) { // Show OCR if available
+          const ocrAccordion = ensureOcrAccordion(messageDiv);
+          const ocrContent = ocrAccordion.querySelector(".ocr-content div");
+          if (ocrContent) {
+            const pre = document.createElement("pre");
+            pre.textContent = ocrText;
+            ocrContent.appendChild(pre);
+          }
+        }
+        // No image accordion for OpenRouter models, even if image was captured.
+      }
+    } else if (ocrText) { // No image captured, but OCR text is present
+      const ocrAccordion = ensureOcrAccordion(messageDiv);
+      const ocrContent = ocrAccordion.querySelector(".ocr-content div");
+      if (ocrContent) {
+        const pre = document.createElement("pre");
+        pre.textContent = ocrText;
+        ocrContent.appendChild(pre);
+      }
     }
   }
 
@@ -407,28 +440,31 @@ async function addMessageToHistory(
     sender === "You" ||
     (sender === "Shard" && !chatHistory.querySelector(".message.assistant.thinking"))
   ) {
-    // Add user messages immediately.
-    // Add Shard messages only if it's not a streaming placeholder (which gets updated by STREAM_END)
-    // This handles direct error messages from Shard added via addMessageToHistory.
-    const role = sender === "You" ? "user" : "assistant";
-    if (ocrText) {
-      let contentWithOcr = content + "\n\n OCR Text: " + ocrText;
-      chatMessageHistory.push({ role, content: contentWithOcr });
-    } else {
-      chatMessageHistory.push({ role, content });
+    const role: "user" | "assistant" = sender === "You" ? "user" : "assistant";
+    const historyEntry: ChatMessage = { role, content };
+    const selectedModel = modelSelect?.value || ""; // Get current model for history decision
+
+    if (sender === "You") {
+      if (imageData && selectedModel.startsWith("gemini-")) {
+        // Only add image data to history if a Gemini model is selected
+        historyEntry.image_base64_data = imageData.base64;
+        historyEntry.image_mime_type = imageData.mime;
+        // OCR text is NOT appended to content if an image is present AND Gemini model
+      } else if (ocrText) {
+        // For OpenRouter models (even if image was captured), or if no image captured,
+        // append OCR text to content if available.
+        historyEntry.content = content + "\n\nOCR Text: " + ocrText;
+      }
     }
+    chatMessageHistory.push(historyEntry);
   }
 
   // Add reasoning accordion if reasoning is present for assistant messages
-  // Add reasoning if provided
   if (sender === "Shard" && reasoning) {
-    const { accordion, content } = createCustomAccordion("Show Reasoning", "reasoning");
-
-    // Display reasoning as preformatted text for now
+    const { accordion, content: reasoningContent } = createCustomAccordion("Show Reasoning", "reasoning");
     const pre = document.createElement("pre");
     pre.textContent = reasoning;
-    content.appendChild(pre);
-
+    reasoningContent.appendChild(pre);
     messageDiv.appendChild(accordion);
   }
 
@@ -621,6 +657,7 @@ async function handleSendMessage() {
   let textToDisplay = userTypedText;
   let tempPathToClean: string | null = null; // Hold path for cleanup *after* sending
   let tempOcrText: string | null = null; // Hold OCR text for accordion *before* clearing
+  let imagePayloadForMessage: { base64: string; mime: string } | null = null;
 
   // Check if there's captured OCR text to prepend
   if (currentOcrText) {
@@ -628,6 +665,9 @@ async function handleSendMessage() {
     // textToSend = userTypedText ? `${userTypedText}\n\n${formattedOcr}` : formattedOcr;
     // For display, show only user text or a placeholder if only OCR
     textToDisplay = userTypedText || "[Screenshot captured]";
+    if (currentImageBase64) { // Ensure we have image data to send
+      imagePayloadForMessage = { base64: currentImageBase64, mime: "image/png" }; // Assuming PNG
+    }
 
     // Store OCR text before clearing for accordion creation
     tempOcrText = currentOcrText;
@@ -649,7 +689,7 @@ async function handleSendMessage() {
   // However, addMessageToHistory ALREADY adds the user message to the visual chat
   // and to chatMessageHistory. So, the history is up-to-date.
 
-  addMessageToHistory("You", textToDisplay, null, tempOcrText); // This will also add it to chatMessageHistory
+  addMessageToHistory("You", textToDisplay, null, tempOcrText, imagePayloadForMessage); // Pass image data
 
   // Optimistically resize window to maximum height expecting a potentially long response
 
@@ -839,6 +879,38 @@ function ensureOcrAccordion(messageDiv: HTMLElement) {
   }
 
   return ocrAccordion;
+}
+
+// NEW function to ensure Image Preview accordion exists
+function ensureImageAccordion(messageDiv: HTMLElement): HTMLElement {
+  let imageAccordion = messageDiv.querySelector(".image-preview-accordion") as HTMLElement;
+
+  if (!imageAccordion) {
+    const { accordion, toggle, content } = createCustomAccordion("Image Preview", "image-preview"); // New type
+    toggle.setAttribute("aria-expanded", "true"); // Start open by default for images
+    content.classList.add("open");
+
+    const imagePreviewDiv = document.createElement("div"); // This div will hold the image
+    content.appendChild(imagePreviewDiv);
+
+    imageAccordion = accordion;
+
+    // Insert after message content, but before OCR or Reasoning if they exist
+    const messageContent = messageDiv.querySelector(".message-content");
+    const ocrAccordionElement = messageDiv.querySelector(".ocr-accordion");
+    const reasoningAccordionElement = messageDiv.querySelector(".reasoning-accordion");
+
+    if (ocrAccordionElement) {
+      messageDiv.insertBefore(imageAccordion, ocrAccordionElement);
+    } else if (reasoningAccordionElement) {
+      messageDiv.insertBefore(imageAccordion, reasoningAccordionElement);
+    } else if (messageContent && messageContent.nextSibling) {
+      messageDiv.insertBefore(imageAccordion, messageContent.nextSibling);
+    } else {
+      messageDiv.appendChild(imageAccordion);
+    }
+  }
+  return imageAccordion;
 }
 
 // Function to finalize current AI response when interjected
@@ -2384,13 +2456,15 @@ console.log("Frontend listener for toggle-main-window set up.");
 // Custom accordion helper functions
 function createCustomAccordion(
   title: string,
-  type: "reasoning" | "web-search" | "arxiv-search" | "ocr", // ADDED "arxiv-search" and "ocr"
+  type: "reasoning" | "web-search" | "arxiv-search" | "ocr" | "image-preview", // ADDED "image-preview"
 ): { accordion: HTMLElement; toggle: HTMLButtonElement; content: HTMLElement } {
   const accordion = document.createElement("div");
   if (type === "reasoning") {
     accordion.className = "reasoning-accordion";
   } else if (type === "ocr") {
     accordion.className = "ocr-accordion";
+  } else if (type === "image-preview") { // New type
+    accordion.className = "image-preview-accordion";
   } else {
     accordion.className = "web-search-accordion"; // Keep general class for web-search style
   }
@@ -2400,6 +2474,8 @@ function createCustomAccordion(
     toggle.className = "reasoning-accordion-toggle";
   } else if (type === "ocr") {
     toggle.className = "ocr-accordion-toggle";
+  } else if (type === "image-preview") { // New type
+    toggle.className = "image-preview-accordion-toggle";
   } else {
     toggle.className = "web-search-accordion-toggle";
   }
@@ -2412,6 +2488,8 @@ function createCustomAccordion(
     content.className = "reasoning-content";
   } else if (type === "ocr") {
     content.className = "ocr-content";
+  } else if (type === "image-preview") { // New type
+    content.className = "image-preview-content"; // Div to hold the image preview
   } else {
     content.className = "web-search-content"; // Keep general class
   }

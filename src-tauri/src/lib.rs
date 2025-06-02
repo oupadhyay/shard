@@ -158,6 +158,14 @@ fn save_config(app_handle: &AppHandle, config: &AppConfig) -> Result<(), String>
 struct ChatMessage {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_base64_data: Option<String>, // Base64 encoded image from frontend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_mime_type: Option<String>,   // E.g., "image/png", "image/jpeg"
+
+    // Internal field for backend use after uploading, not directly set by frontend for sending
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_file_api_uri: Option<String>, // URI from Gemini File API
 }
 
 #[derive(Serialize, Debug)]
@@ -178,12 +186,33 @@ struct ModelResponse {
 }
 
 // --- Gemini API Structures ---
-#[derive(Serialize, Deserialize, Debug)] // Deserialize needed for Candidate's content
-struct GeminiPart {
-    text: String,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GeminiFileUri {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    #[serde(rename = "fileUri")]
+    file_uri: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)] // Deserialize needed for Candidate's content
+// If we support inline data in the future
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// struct GeminiInlineBlob {
+//     #[serde(rename = "mimeType")]
+//     mime_type: String,
+//     data: String, // base64 encoded image
+// }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)] // Allows different structures (e.g., text vs. image part)
+enum GeminiPart {
+    Text { text: String },
+    FileData {
+        #[serde(rename = "fileData")]
+        file_data: GeminiFileUri,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)] // Deserialize needed for Candidate's content, added Clone
 struct GeminiContent {
     parts: Vec<GeminiPart>,
     role: Option<String>, // Optional: "user" or "model"
@@ -1158,6 +1187,9 @@ async fn send_text_to_model(
     final_messages.push(ChatMessage {
         role: "system".to_string(), // This role will be adapted by call_gemini_api
         content: SYSTEM_INSTRUCTION.to_string(),
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
     });
     // Original user messages will be added after potential web search or financial data context
 
@@ -1220,6 +1252,9 @@ async fn send_text_to_model(
                     let decider_messages = vec![ChatMessage {
                         role: "user".to_string(),
                         content: decider_prompt,
+                        image_base64_data: None,
+                        image_mime_type: None,
+                        image_file_api_uri: None,
                     }];
                     let decider_model_name = "gemini-2.0-flash".to_string();
 
@@ -1665,6 +1700,9 @@ async fn send_text_to_model(
                 "Context from Wikipedia lookup:\n{}\n\n Given this context, please answer the following user query:",
                 article_lookup_result_text.unwrap()
             ),
+            image_base64_data: None,
+            image_mime_type: None,
+            image_file_api_uri: None,
         });
     } else if weather_lookup_performed_successfully && weather_lookup_result_text.is_some() {
         final_messages.push(ChatMessage {
@@ -1673,6 +1711,9 @@ async fn send_text_to_model(
                 "Context from Weather lookup:\n{}\n\n Given this context, please answer the following user query:",
                 weather_lookup_result_text.unwrap()
             ),
+            image_base64_data: None,
+            image_mime_type: None,
+            image_file_api_uri: None,
         });
     } else if financial_data_fetched_successfully && financial_data_result_text.is_some() {
         final_messages.push(ChatMessage {
@@ -1681,6 +1722,9 @@ async fn send_text_to_model(
                 "Context from Financial data lookup:\n{}\n\n Given this context, please answer the following user query:",
                 financial_data_result_text.unwrap()
             ),
+            image_base64_data: None,
+            image_mime_type: None,
+            image_file_api_uri: None,
         });
     } else if arxiv_lookup_performed_successfully && arxiv_lookup_result_text.is_some() {
         // ADDED ArXiv
@@ -1690,11 +1734,41 @@ async fn send_text_to_model(
                 "Context from ArXiv Search:\n{}\n\n Please answer the following user query:",
                 arxiv_lookup_result_text.unwrap()
             ),
+            image_base64_data: None,
+            image_mime_type: None,
+            image_file_api_uri: None,
         });
     }
 
     // Append original user messages
     final_messages.extend(messages.into_iter());
+
+    // Process messages for potential image uploads IF a Gemini model is selected
+    if model_name.starts_with("gemini-") || model_name.starts_with("google/") {
+        if let Some(gemini_key) = &config.gemini_api_key {
+            if !gemini_key.is_empty() {
+                for msg in final_messages.iter_mut() { // Modify final_messages directly
+                    if let (Some(base64_data), Some(mime_type)) = (&msg.image_base64_data, &msg.image_mime_type) {
+                        // Only upload if URI is not already set
+                        if msg.image_file_api_uri.is_none() {
+                            log::info!("Message has image data, attempting upload to Gemini File API...");
+                            match upload_image_to_gemini_file_api(&client, base64_data, mime_type, gemini_key).await {
+                                Ok(file_uri_details) => {
+                                    log::info!("Image uploaded successfully, URI: {}", file_uri_details.file_uri);
+                                    msg.image_file_api_uri = Some(file_uri_details.file_uri);
+                                    msg.image_mime_type = Some(file_uri_details.mime_type);
+                                    msg.image_base64_data = None; // Clear base64 after successful upload
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to upload image to Gemini File API: {}. Image will not be included.", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Check if the model is a Gemini model
     if model_name.starts_with("gemini-") || model_name.starts_with("google/") {
@@ -1715,7 +1789,7 @@ async fn send_text_to_model(
 
         match call_gemini_api(
             &client, // Pass client
-            final_messages,
+            final_messages, // Pass the directly modified final_messages
             gemini_api_key,
             model_name.replace("google/", ""),
             window.clone(),
@@ -1750,7 +1824,7 @@ async fn send_text_to_model(
         );
         match call_openrouter_api(
             &client,
-            final_messages,
+            final_messages, // Pass the directly modified final_messages
             api_key,
             model_name,
             window.clone(),
@@ -1918,18 +1992,38 @@ async fn call_gemini_api(
     let request_payload = GeminiChatCompletionRequest {
         contents: messages
             .into_iter()
-            .map(|msg| {
-                let role_for_gemini = if msg.role == "assistant" {
+            .map(|chat_msg| {
+                let role_for_gemini = if chat_msg.role == "assistant" {
                     "model".to_string()
-                } else if msg.role == "system" {
+                } else if chat_msg.role == "system" {
                     // Our prepended system instruction
                     "user".to_string() // Gemini handles system prompts as initial "user" messages
                 } else {
                     // "user" (from human actual input)
-                    msg.role // Assuming it's "user"
+                    chat_msg.role // Assuming it's "user"
                 };
+
+                let mut parts: Vec<GeminiPart> = Vec::new();
+
+                // Add image part first if available (File API URI)
+                if let (Some(file_uri), Some(mime_type)) = (&chat_msg.image_file_api_uri, &chat_msg.image_mime_type) {
+                    parts.push(GeminiPart::FileData { // Corrected: Use enum variant
+                        file_data: GeminiFileUri {
+                            mime_type: mime_type.clone(),
+                            file_uri: file_uri.clone(),
+                        },
+                    });
+                }
+                // else if let (Some(base64_data), Some(mime_type)) = (&chat_msg.image_base64_data, &chat_msg.image_mime_type) {
+                //     // Fallback to inline data if URI not present AND base64 is (e.g., if File API failed but we want to try inline)
+                //     // This part depends on GeminiPart::InlineData being enabled and GeminiInlineBlob struct
+                // }
+
+                // Always add text part
+                parts.push(GeminiPart::Text { text: chat_msg.content }); // Corrected: Use enum variant
+
                 GeminiContent {
-                    parts: vec![GeminiPart { text: msg.content }],
+                    parts,
                     role: Some(role_for_gemini),
                 }
             })
@@ -2003,7 +2097,10 @@ async fn call_gemini_api(
                                                         if let Some(part) =
                                                             candidate.content.parts.get(0)
                                                         {
-                                                            let content_text = &part.text;
+                                                            let content_text = match part { // Corrected: Destructure GeminiPart
+                                                                GeminiPart::Text { text } => text,
+                                                                GeminiPart::FileData { .. } => "", // Or handle appropriately if FileData can appear here
+                                                            };
 
                                                             if model_identifier_from_config.ends_with("#thinking-enabled") {
                                                                 // Parse reasoning from content only for thinking-enabled models
@@ -2482,7 +2579,7 @@ async fn call_gemini_api_non_streaming(
         contents: messages
             .into_iter()
             .map(|msg| GeminiContent {
-                parts: vec![GeminiPart { text: msg.content }],
+                parts: vec![GeminiPart::Text { text: msg.content }], // Corrected: Use enum variant
                 role: Some(msg.role), // Directly use the role, assuming "user" for decider prompt
             })
             .collect(),
@@ -2508,8 +2605,15 @@ async fn call_gemini_api_non_streaming(
                     Ok(gemini_response) => {
                         if let Some(candidate) = gemini_response.candidates.get(0) {
                             if let Some(part) = candidate.content.parts.get(0) {
-                                log::debug!("Non-streaming Gemini response text: {}", part.text);
-                                Ok(part.text.clone())
+                                match part { // Corrected: Destructure GeminiPart
+                                    GeminiPart::Text { text } => {
+                                        log::debug!("Non-streaming Gemini response text: {}", text);
+                                        Ok(text.clone())
+                                    }
+                                    GeminiPart::FileData { .. } => {
+                                        Err("Non-streaming Gemini response: Unexpected FileData part".to_string())
+                                    }
+                                }
                             } else {
                                 Err("Non-streaming Gemini response: No content parts found"
                                     .to_string())
@@ -2584,6 +2688,9 @@ async fn extract_location_for_geocoding(
     let extractor_messages = vec![ChatMessage {
         role: "user".to_string(),
         content: extractor_prompt,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
     }];
 
     log::info!(
@@ -2653,6 +2760,9 @@ async fn extract_wikipedia_search_term(
     let extractor_messages = vec![ChatMessage {
         role: "user".to_string(),
         content: extractor_prompt,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
     }];
 
     log::info!(
@@ -2737,6 +2847,9 @@ async fn analyze_wikipedia_page_for_iteration(
     let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: prompt,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
     }];
 
     log::info!(
@@ -3339,6 +3452,9 @@ async fn extract_arxiv_query_parameters(
     let extractor_messages = vec![ChatMessage {
         role: "user".to_string(),
         content: prompt,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
     }];
 
     log::info!(
@@ -3599,4 +3715,119 @@ async fn perform_arxiv_lookup(
             Err(format!("ArXiv API network request failed: {}", e))
         }
     }
+}
+
+async fn upload_image_to_gemini_file_api(
+    client: &reqwest::Client,
+    image_base64_data: &str,
+    mime_type: &str,
+    gemini_api_key: &str,
+) -> Result<GeminiFileUri, String> {
+    // Step 1: Decode base64 to bytes
+    let image_bytes = match general_purpose::STANDARD.decode(image_base64_data) {
+        Ok(bytes) => bytes,
+        Err(e) => return Err(format!("Failed to decode base64 image: {}", e)),
+    };
+    let num_bytes = image_bytes.len();
+
+    // Step 2: Initial POST to get upload_url
+    // Create a unique display name, e.g., from UUID and extension
+    let file_extension = mime_type.split('/').last().unwrap_or("bin");
+    let display_name = format!("upload-{}.{}", Uuid::new_v4(), file_extension);
+
+    let initial_upload_url = format!(
+        "https://generativelanguage.googleapis.com/upload/v1beta/files?key={}",
+        gemini_api_key
+    );
+
+    #[derive(Serialize)]
+    struct FileMetadata<'a> { display_name: &'a str }
+    #[derive(Serialize)]
+    struct InitialUploadRequestPayload<'a> { file: FileMetadata<'a> }
+
+    let initial_payload = InitialUploadRequestPayload { file: FileMetadata { display_name: &display_name } };
+
+    log::info!("Starting Gemini File API upload (Step 1: Start) for display_name: {}", display_name);
+
+    let start_response_result = client
+        .post(&initial_upload_url)
+        .header("X-Goog-Upload-Protocol", "resumable")
+        .header("X-Goog-Upload-Command", "start")
+        .header("X-Goog-Upload-Header-Content-Length", num_bytes.to_string())
+        .header("X-Goog-Upload-Header-Content-Type", mime_type)
+        .header("Content-Type", "application/json")
+        .json(&initial_payload)
+        .send()
+        .await;
+
+    let start_response = match start_response_result {
+        Ok(resp) => resp,
+        Err(e) => return Err(format!("Gemini File API (start) request failed: {}", e)),
+    };
+
+    let start_status = start_response.status(); // Get status before consuming response
+    if !start_status.is_success() {
+        let error_body = start_response.text().await.unwrap_or_else(|_| "Unknown error during file upload start".to_string());
+        return Err(format!("Gemini File API (start) failed with status {}: {}", start_status, error_body));
+    }
+
+    let upload_url_from_header = start_response
+        .headers()
+        .get("x-goog-upload-url")
+        .ok_or_else(|| "Gemini File API (start) response missing x-goog-upload-url header".to_string())?
+        .to_str()
+        .map_err(|e| format!("Gemini File API (start) x-goog-upload-url header invalid: {}", e))?
+        .to_string();
+
+    log::info!("Gemini File API upload (Step 1: Start) successful. Upload URL: {}", upload_url_from_header);
+
+    // Step 3: POST image bytes to upload_url
+    // As per Gemini docs (curl example), the data upload uses POST with "upload, finalize"
+    log::info!("Starting Gemini File API upload (Step 2: Upload Bytes) to: {}", upload_url_from_header);
+    let upload_response_result = client
+        .post(&upload_url_from_header) // Using POST for the data chunk
+        .header("X-Goog-Upload-Offset", "0")
+        .header("X-Goog-Upload-Command", "upload, finalize") // Critical for single-shot upload
+        .header("Content-Type", mime_type) // Content-Type of the body itself
+        .body(image_bytes)
+        .send()
+        .await;
+
+    let upload_response = match upload_response_result {
+        Ok(resp) => resp,
+        Err(e) => return Err(format!("Gemini File API (upload) request failed: {}", e)),
+    };
+
+    let upload_status = upload_response.status(); // Get status before consuming response
+    if !upload_status.is_success() {
+        let error_body = upload_response.text().await.unwrap_or_else(|_| "Unknown error during file upload".to_string());
+        return Err(format!("Gemini File API (upload) failed with status {}: {}", upload_status, error_body));
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct UploadedFileDetails {
+        // name: String,
+        #[serde(rename = "uri")] file_uri: String,
+        #[serde(rename = "mimeType")] mime_type: String
+    }
+    #[derive(Deserialize, Debug)]
+    struct FileApiUploadResponse { file: UploadedFileDetails }
+
+    let response_json = match upload_response.json::<FileApiUploadResponse>().await { // upload_response is consumed here
+        Ok(json) => json,
+        Err(e) => {
+            // If .json() fails, we can't use upload_response.text() anymore because it's consumed.
+            // The error 'e' from .json() should ideally contain enough info.
+            // Or, we would need to read the body as text first, then try to parse if status was success.
+            // For now, just returning the parsing error.
+            return Err(format!("Gemini File API (upload) response JSON parse error: {}. Status was {}", e, upload_status));
+        }
+    };
+
+    log::info!("Gemini File API upload (Step 2: Upload Bytes) successful. File URI: {}", response_json.file.file_uri);
+
+    Ok(GeminiFileUri {
+        mime_type: response_json.file.mime_type, // Use mimeType from response
+        file_uri: response_json.file.file_uri,
+    })
 }

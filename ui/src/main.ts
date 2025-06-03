@@ -1,4 +1,5 @@
 import "./style.css";
+import DOMPurify from 'dompurify';
 import { core } from "@tauri-apps/api";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -15,6 +16,18 @@ import "katex/dist/katex.min.css";
 
 // Configure markdown-it to use KaTeX
 const md = new MarkdownIt();
+
+// Safe rendering helper with DOMPurify sanitization
+function safeRender(content: string): string {
+  const rawHtml = md.render(preprocessLatex(content));
+  return DOMPurify.sanitize(rawHtml);
+}
+
+function safeRenderInline(content: string): string {
+  const rawHtml = md.renderInline(preprocessLatex(content));
+  return DOMPurify.sanitize(rawHtml);
+}
+
 md.use(markdownItKatex, { throwOnError: false });
 
 // DOM Elements
@@ -364,7 +377,7 @@ async function addMessageToHistory(
   const contentDiv = document.createElement("div");
   contentDiv.classList.add("message-content");
   try {
-    contentDiv.innerHTML = md.render(preprocessLatex(content)); // Render complete content with preprocessing
+    contentDiv.innerHTML = safeRender(content); // Safe rendering with DOMPurify sanitization
   } catch (e) {
     console.error("Error parsing markdown/katex:", e);
     contentDiv.textContent = content; // Fallback to text if parsing fails
@@ -844,8 +857,8 @@ async function handleSendMessage() {
   } catch (error) {
     console.error("Failed to invoke send_text_to_model:", error);
     if (currentAssistantContentDiv) {
-      currentAssistantContentDiv.innerHTML = md.render(
-        preprocessLatex(`Error invoking model: ${error}`),
+      currentAssistantContentDiv.innerHTML = safeRender(
+        `Error invoking model: ${error}`
       );
     } else {
       addMessageToHistory("Shard", `Error invoking model: ${error}`);
@@ -1260,7 +1273,7 @@ async function setupStreamListeners() {
         const currentContent = reasoningContent.getAttribute("data-raw-content") || "";
         const updatedContent = currentContent + event.payload.reasoning;
         reasoningContent.setAttribute("data-raw-content", updatedContent);
-        reasoningContent.innerHTML = md.render(preprocessLatex(updatedContent));
+        reasoningContent.innerHTML = safeRender(updatedContent);
       }
     }
 
@@ -1300,7 +1313,7 @@ async function setupStreamListeners() {
             const remainingText = textToProcess.substring(MAX_SUB_CHUNK_LENGTH);
 
             const newSpan = document.createElement("span");
-            newSpan.innerHTML = md.renderInline(preprocessLatex(subChunk)); // Render this piece with preprocessing
+            newSpan.innerHTML = safeRenderInline(subChunk); // Safe rendering with DOMPurify
             newSpan.style.opacity = "0";
             newSpan.style.transition = "opacity 0.3s ease-out";
             responseContentDiv.appendChild(newSpan);
@@ -1687,7 +1700,7 @@ async function setupStreamListeners() {
 
         // Now set the final content
         try {
-          responseContentDiv.innerHTML = md.render(preprocessLatex(event.payload.full_content));
+          responseContentDiv.innerHTML = safeRender(event.payload.full_content);
           console.log(`[DEBUG] Set final content for response ${listenerResponseCounter}`);
         } catch (e) {
           console.error("Error rendering markdown for main content:", e);
@@ -1742,7 +1755,7 @@ async function setupStreamListeners() {
         const reasoningContent = reasoningAccordion.querySelector(".reasoning-content div");
         if (reasoningContent) {
           reasoningContent.setAttribute("data-raw-content", event.payload.reasoning);
-          reasoningContent.innerHTML = md.render(preprocessLatex(event.payload.reasoning));
+          reasoningContent.innerHTML = safeRender(event.payload.reasoning);
         }
       }
 
@@ -1848,7 +1861,7 @@ async function setupStreamListeners() {
       if (existingDots) {
         existingDots.remove();
       }
-      responseContentDiv.innerHTML = md.render(preprocessLatex(`Error: ${event.payload.error}`)); // Preprocess LaTeX
+      responseContentDiv.innerHTML = safeRender(`Error: ${event.payload.error}`);
       responseMessageDiv.classList.remove("streaming");
       responseMessageDiv.classList.add("error"); // Optional: add error class for styling
     } else {

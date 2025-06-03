@@ -507,7 +507,8 @@ fn separate_reasoning_from_content(text: &str) -> (String, String) {
                         // Last line is probably content, rest is reasoning
                         let reasoning_part =
                             lines_in_section[..lines_in_section.len() - 1].join("\n");
-                        let content_part = lines_in_section.last().unwrap();
+                        let content_part = lines_in_section.last()
+                            .expect("Failed to get last line of reasoning section");
 
                         if !reasoning_part.trim().is_empty() {
                             reasoning_parts.push(reasoning_part.trim().to_string());
@@ -536,7 +537,8 @@ fn separate_reasoning_from_content(text: &str) -> (String, String) {
 
     // Convert **Header** patterns to proper markdown headers with spacing
     // Find any **Header** pattern and replace with proper newlines + ## header
-    let re = regex::Regex::new(r"\*\*([^*]+?)\*\*").unwrap();
+    let re = regex::Regex::new(r"\*\*([^*]+?)\*\*")
+        .expect("Failed to compile regex for reasoning header replacement");
     reasoning = re.replace_all(&reasoning, "\n\n## $1").to_string();
 
     // Clean up any multiple newlines and ensure proper start
@@ -566,7 +568,7 @@ async fn perform_wikipedia_lookup(
         .get(base_url)
         .query(&params)
         .build()
-        .unwrap()
+        .expect("Failed to build Wikipedia URL")
         .url()
         .to_string();
     log::info!("Performing Wikipedia lookup. Request URL: {}", request_url);
@@ -776,7 +778,7 @@ async fn geocode_location(
         .get(base_url)
         .query(&params)
         .build()
-        .unwrap()
+        .expect("Failed to build geocoding URL")
         .url()
         .to_string();
     log::info!("Geocoding for '{}'. URL: {}", location_name, request_url);
@@ -1698,7 +1700,7 @@ async fn send_text_to_model(
             role: "user".to_string(),
             content: format!(
                 "Context from Wikipedia lookup:\n{}\n\n Given this context, please answer the following user query:",
-                article_lookup_result_text.unwrap()
+                article_lookup_result_text.as_deref().unwrap_or("No context available")
             ),
             image_base64_data: None,
             image_mime_type: None,
@@ -1709,7 +1711,7 @@ async fn send_text_to_model(
             role: "user".to_string(),
             content: format!(
                 "Context from Weather lookup:\n{}\n\n Given this context, please answer the following user query:",
-                weather_lookup_result_text.unwrap()
+                weather_lookup_result_text.as_deref().unwrap_or("No context available")
             ),
             image_base64_data: None,
             image_mime_type: None,
@@ -1720,7 +1722,7 @@ async fn send_text_to_model(
             role: "user".to_string(),
             content: format!(
                 "Context from Financial data lookup:\n{}\n\n Given this context, please answer the following user query:",
-                financial_data_result_text.unwrap()
+                financial_data_result_text.as_deref().unwrap_or("No context available")
             ),
             image_base64_data: None,
             image_mime_type: None,
@@ -3155,7 +3157,7 @@ async fn perform_weather_lookup(
                 .get(base_url)
                 .query(&params)
                 .build()
-                .unwrap()
+                .expect("Failed to build financial data URL")
                 .url()
                 .to_string();
             log::info!(

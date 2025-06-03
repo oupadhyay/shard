@@ -856,19 +856,11 @@ async function handleSendMessage() {
 
   } catch (error) {
     console.error("Failed to invoke send_text_to_model:", error);
-    if (currentAssistantContentDiv) {
-      currentAssistantContentDiv.innerHTML = safeRender(
-        `Error invoking model: ${error}`
-      );
-    } else {
-      addMessageToHistory("Shard", `Error invoking model: ${error}`);
-    }
     if (currentAssistantMessageDiv) {
       currentAssistantMessageDiv.classList.remove("streaming");
       currentAssistantMessageDiv.classList.add("error");
     }
     isAIResponding = false;
-
     await clearInlineImageAndData(); // Clear image data on error too
   } finally {
     updateInputAreaLayout();

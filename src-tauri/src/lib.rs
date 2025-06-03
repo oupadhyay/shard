@@ -90,7 +90,7 @@ struct ArxivSearchParameters {
 }
 
 // Default model if none is selected
-const DEFAULT_MODEL: &str = "deepseek/deepseek-chat-v3-0324:free";
+const DEFAULT_MODEL: &str = "gemini-2.5-flash-preview-05-20#thinking-enabled";
 
 // --- System Instruction ---
 const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.";
@@ -2530,19 +2530,38 @@ async fn call_openrouter_api(
                     .text()
                     .await
                     .unwrap_or_else(|_| "Could not read error body".to_string());
+
+                // Parse error response for better rate limit message
+                let error_msg = if status == 429 {
+                    match serde_json::from_str::<serde_json::Value>(&error_text) {
+                        Ok(json) => {
+                            json["error"]["message"]
+                                .as_str()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "Rate limit exceeded".to_string())
+                        }
+                        Err(_) => format!("API request failed: {} - {}", status, error_text),
+                    }
+                } else {
+                    format!("API request failed: {} - {}", status, error_text)
+                };
+
                 log::error!(
                     "OpenRouter API request failed with status {}: {}",
                     status,
                     error_text
                 );
-                let err_msg = format!("API request failed: {} - {}", status, error_text);
+
+                // Emit the error only once
                 let _ = window.emit(
                     "STREAM_ERROR",
                     StreamErrorPayload {
-                        error: err_msg.clone(),
+                        error: error_msg.clone(),
                     },
                 );
-                Err(err_msg)
+
+                // Return the detailed error message
+                Err(error_msg)
             }
         }
         Err(e) => {

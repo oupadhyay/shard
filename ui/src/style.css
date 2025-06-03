@@ -902,12 +902,12 @@ body {
 /* --- Fade Animations for Window Toggle --- */
 body.fade-in {
     opacity: 1 !important;
-    transition: opacity 200ms ease-in-out;
+    transition: opacity 300ms ease-in-out;
 }
 
 body.fade-out {
-    opacity: 0.5 !important;
-    transition: opacity 200ms ease-in-out;
+    opacity: 0 !important;
+    transition: opacity 300ms ease-in-out;
 }
 
 #settings-panel .setting-item {

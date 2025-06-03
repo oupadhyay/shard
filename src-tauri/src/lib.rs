@@ -31,10 +31,22 @@ static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(u64::MAX); // Use MAX as "no cancellation"
 
 // --- ADDED: Structs for parsing ArXiv Atom XML response ---
+
+// NEW Enum to represent children of the <feed> tag
+#[derive(Debug, Deserialize)]
+enum FeedChild {
+    #[serde(rename = "entry")]
+    Entry(ArxivEntry), // For <entry> tags
+    #[serde(other)]    // Catches any other tags like <link>, <title>, <id>, <updated> under <feed>
+    Other,
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct ArxivFeed {
-    #[serde(rename = "entry", default)]
-    entries: Vec<ArxivEntry>,
+    // This field will collect all direct children of the <feed> element.
+    // Each child will be deserialized into the appropriate FeedChild variant.
+    #[serde(rename = "$value", default)]
+    children: Vec<FeedChild>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -46,8 +58,8 @@ struct ArxivEntry {
     summary: Option<String>, // This is the abstract
     #[serde(rename = "author", default)]
     authors: Vec<ArxivAuthor>,
-    #[serde(rename = "link", default)]
-    links: Vec<ArxivLink>,
+    #[serde(rename = "link", default)] // XML tag is still "link"
+    entry_links: Vec<ArxivLink>,      // Rust field name changed from 'links' to 'entry_links'
     #[serde(rename = "primary_category", default)]
     primary_category: Option<ArxivCategory>,
     #[serde(rename = "category", default)]
@@ -3522,6 +3534,18 @@ async fn extract_arxiv_query_parameters(
     }
 }
 
+// Helper function to clean titles for ArXiv search
+fn clean_title(
+    title_str: &str,
+) -> String {
+    title_str
+        .replace('-', " ")
+        .replace('–', " ")
+        .replace('—', " ")
+        .replace('_', " ")
+        .to_string()
+}
+
 // --- ADDED: Helper function to construct the final search query string for arXiv ---
 fn build_final_arxiv_search_string(
     params: ArxivSearchParameters,
@@ -3531,8 +3555,8 @@ fn build_final_arxiv_search_string(
 
     // Handle title: unfielded, unquoted
     if let Some(title_str) = &params.title {
-        // Use the trim_matches logic that was already added by the user
-        let cleaned_title = title_str
+        // Clean hyphens/dashes from title and trim quotes
+        let cleaned_title = clean_title(title_str)
             .trim_matches(|c| c == '"' || c == '\'')
             .to_string();
         if !cleaned_title.is_empty() {
@@ -3615,14 +3639,25 @@ async fn perform_arxiv_lookup(
                             "Successfully fetched ArXiv XML response. Length: {}",
                             xml_text.len()
                         );
-                        // log::debug!("ArXiv XML Response:\n{}", xml_text); // Keep this commented for now unless debugging specific XML issues
+                        log::debug!("ArXiv XML Response:\n{}", xml_text); // Keep this commented for now unless debugging specific XML issues
 
                         match from_str::<ArxivFeed>(&xml_text) {
-                            Ok(feed) => {
+                            Ok(parsed_feed) => {
                                 let mut papers: Vec<ArXivPaper> = Vec::new();
-                                for entry in feed.entries {
+                                let mut actual_entries: Vec<ArxivEntry> = Vec::new();
+
+                                // Iterate through children of <feed> and collect only Entry variants
+                                for child in parsed_feed.children {
+                                    if let FeedChild::Entry(entry) = child {
+                                        actual_entries.push(entry);
+                                    }
+                                }
+
+                                // Now process actual_entries like before
+                                for entry in actual_entries { // MODIFIED: Iterate over actual_entries
                                     let paper_id = entry.id.unwrap_or_default();
-                                    let title = entry.title.unwrap_or_default();
+                                    let mut title = entry.title.unwrap_or_default();
+                                    title = clean_title(&title);
                                     let abstract_text = entry.summary.unwrap_or_default(); // 'summary' in Atom is the abstract
                                     let published = entry.published.unwrap_or_default();
                                     let updated = entry.updated.unwrap_or_default();
@@ -3636,7 +3671,7 @@ async fn perform_arxiv_lookup(
                                         .collect();
 
                                     let mut pdf_url_option: Option<String> = None;
-                                    for link in entry.links {
+                                    for link in entry.entry_links { // MODIFIED: was entry.links
                                         // MODIFIED: Clone link.href for the first check to avoid move issues
                                         if let (Some(href), Some(title_attr)) =
                                             (link.href.clone(), link.title)
@@ -3647,8 +3682,6 @@ async fn perform_arxiv_lookup(
                                             }
                                         }
                                         // Fallback if title attribute is not present but rel="alternate" and type="application/pdf"
-                                        // No change needed here as link.href was already being cloned for this path if the first path wasn't taken.
-                                        // However, if the first path IS taken, link.href would have been moved if not for the clone above.
                                         else if let (
                                             Some(href),
                                             Some(rel_attr),
@@ -3684,7 +3717,7 @@ async fn perform_arxiv_lookup(
                                     // `journal_ref` is not directly available in the standard Atom entry without specific arxiv: namespace parsing for it.
                                     papers.push(ArXivPaper {
                                         id: paper_id,
-                                        title,
+                                        title: clean_title(&title),
                                         authors,
                                         abstract_text,
                                         categories,

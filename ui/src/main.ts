@@ -2438,7 +2438,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 // --- Event Listener for Window Toggle ---
-const FADE_DURATION = 200; // ms - Should match CSS transition duration
+const FADE_DURATION = 300; // ms - Should match CSS transition duration
 
 // --- Function to handle clicks outside the settings panel ---
 function handleClickOutsideSettings(event: MouseEvent) {

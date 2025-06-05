@@ -827,6 +827,8 @@ async function handleSendMessage() {
     contentDiv: currentAssistantContentDiv,
   });
 
+  updateInputAreaLayout();
+
   if (chatHistory) {
     chatHistory.appendChild(assistantMessagePlaceholder);
     chatHistory.scrollTop = chatHistory.scrollHeight;

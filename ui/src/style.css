@@ -823,23 +823,22 @@ body {
 
 #message-input {
     flex-grow: 1;
-    padding: 5px 5px 5px 5px; /* Adjust padding */
-    background-color: transparent; /* Make input transparent */
+    padding: 5px 5px 5px 5px;
+    background-color: transparent;
     border: none;
     color: rgba(255, 255, 255, 0.9);
     font-size: 1em;
-    outline: none; /* Remove focus outline */
-    /* Textarea specific styles */
-    resize: none; /* Disable manual resize handle */
-    /* MODIFIED for contenteditable div */
-    overflow-y: auto; /* Allow scrolling */
-    line-height: 1.4; /* Match body line-height */
+    outline: none;
+    resize: none;
+    overflow-y: auto;
+    line-height: 1.3;
     min-height: 30px; /* Start at single line height - same as initialTextareaHeight */
-    max-height: 200px; /* Max height before scrolling */
-    font-family: inherit; /* Ensure font matches */
+    max-height: 200px;
+    font-family: inherit;
     white-space: pre-wrap; /* Respect newlines and wrap */
-    word-wrap: break-word; /* Break long words */
-    -webkit-user-modify: read-write-plaintext-only; /* Attempt to keep paste simple */
+    word-wrap: break-word;
+    -webkit-user-modify: read-write-plaintext-only;
+    scrollbar-width: none;
 }
 
 /* ADDED: Styles for placeholder text on contenteditable div */

@@ -230,8 +230,6 @@ body {
     box-sizing: border-box;
 }
 
-
-
 .input-wrapper {
     display: flex;
     align-items: flex-start; /* Align items to the top */
@@ -489,6 +487,34 @@ body {
     display: none !important;
 }
 
+/* Clear/Undo button icon transitions */
+#clear-chat-button {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+}
+
+#clear-chat-button svg {
+    position: absolute;
+    transition: opacity 0.25s ease-in-out;
+    opacity: 1;
+}
+
+#clear-chat-button svg.hidden {
+    display: none !important;
+}
+
+#clear-chat-button svg.fading-out {
+    opacity: 0;
+}
+
+#clear-chat-button svg.fading-in {
+    opacity: 0;
+}
+
 /* General Tool Button Style */
 #tool-buttons button,
 #ocr-icon-container {
@@ -539,6 +565,8 @@ body {
     border-radius: 50%;
     cursor: pointer;
     padding: 6px;
+    width: 30px;
+    height: 30px;
     transition:
         color 0.2s,
         background-color 0.2s,
@@ -714,9 +742,10 @@ body {
     border: none;
     font-family: inherit;
     text-align: left;
-    width: 100%;
     display: flex;
     align-items: center;
+    width: 30px;
+    height: 30px;
 }
 
 .ocr-accordion-toggle:hover {
@@ -843,59 +872,59 @@ body {
 
 /* ADDED: Styles for placeholder text on contenteditable div */
 #message-input.placeholder-active::before {
-  content: "Type your message..."; /* Your placeholder text */
-  position: absolute;
-  left: 16px; /* Should match #message-input padding-left */
-  top: 14px;   /* Should match #message-input padding-top */
-  color: rgba(255, 255, 255, 0.4); /* Placeholder text color */
-  pointer-events: none; /* Allows clicks to pass through to the input */
+    content: "Type your message..."; /* Your placeholder text */
+    position: absolute;
+    left: 16px; /* Should match #message-input padding-left */
+    top: 14px; /* Should match #message-input padding-top */
+    color: rgba(255, 255, 255, 0.4); /* Placeholder text color */
+    pointer-events: none; /* Allows clicks to pass through to the input */
 }
 
 /* ADDED: Styles for inline image within contenteditable */
 .inline-image-wrapper {
-  display: inline-block;
-  position: relative;
-  vertical-align: middle;
-  margin: 2px 4px 2px 2px;
-  line-height: normal;
-  max-width: calc(100% - 10px);
+    display: inline-block;
+    position: relative;
+    vertical-align: middle;
+    margin: 2px 4px 2px 2px;
+    line-height: normal;
+    max-width: calc(100% - 10px);
 }
 
 .inline-image-wrapper img {
-  max-width: 100%;
-  max-height: 80px;
-  border-radius: 4px;
-  display: block;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+    max-width: 100%;
+    max-height: 80px;
+    border-radius: 4px;
+    display: block;
+    border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .delete-inline-image-btn {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background-color: rgba(30, 30, 30, 0.8);
-  color: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  font-size: 12px;
-  font-weight: bold;
-  line-height: 16px;
-  text-align: center;
-  cursor: pointer;
-  opacity: 0.6;
-  transition: all 0.2s ease-in-out;
-  z-index: 10;
-  padding: 0;
-  box-sizing: border-box;
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: rgba(30, 30, 30, 0.8);
+    color: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    font-size: 12px;
+    font-weight: bold;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: all 0.2s ease-in-out;
+    z-index: 10;
+    padding: 0;
+    box-sizing: border-box;
 }
 
 .delete-inline-image-btn:hover {
-  opacity: 1;
-  background-color: rgba(200, 0, 0, 0.9);
-  color: white;
-  transform: scale(1.1);
+    opacity: 1;
+    background-color: rgba(200, 0, 0, 0.9);
+    color: white;
+    transform: scale(1.1);
 }
 
 /* --- Fade Animations for Window Toggle --- */
@@ -905,6 +934,26 @@ body.fade-in {
 }
 
 body.fade-out {
+    opacity: 0 !important;
+    transition: opacity 300ms ease-in-out;
+}
+
+#chat-history.fade-in {
+    opacity: 1 !important;
+    transition: opacity 100ms ease-in-out;
+}
+
+#chat-history.fade-out {
+    opacity: 0.2 !important;
+    transition: opacity 100ms ease-in-out;
+}
+
+#chat-history {
+    opacity: 1 !important;
+    transition: opacity 100ms ease-in-out;
+}
+
+#chat-history.fade-out {
     opacity: 0 !important;
     transition: opacity 300ms ease-in-out;
 }
@@ -1271,7 +1320,9 @@ body.fade-out {
     overflow: hidden;
     max-height: 0;
     opacity: 0;
-    transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out;
+    transition:
+        max-height 0.3s ease-in-out,
+        opacity 0.3s ease-in-out;
     display: flex;
     justify-content: center;
     align-items: center;

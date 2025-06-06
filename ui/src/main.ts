@@ -1,5 +1,5 @@
 import "./style.css";
-import DOMPurify from 'dompurify';
+import DOMPurify from "dompurify";
 import { core } from "@tauri-apps/api";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -38,6 +38,8 @@ const apiKeyStatusIcon = document.getElementById("api-key-status-icon") as HTMLS
 const settingsToggle = document.getElementById("settings-toggle") as HTMLButtonElement;
 const settingsPanel = document.getElementById("settings-panel") as HTMLDivElement;
 const clearChatButton = document.getElementById("clear-chat-button") as HTMLButtonElement;
+const clearIcon = document.getElementById("clear-icon") as SVGElement | null;
+const undoIcon = document.getElementById("undo-icon") as SVGElement | null;
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
 const webSearchToggle = document.getElementById("web-search-toggle") as HTMLInputElement;
 
@@ -106,6 +108,16 @@ function getWordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length; // ADDED
 }
 
+// Backup interface for undo functionality
+interface ChatBackup {
+  chatMessageHistory: ChatMessage[];
+  chatHistoryHTML: string;
+  currentOcrText: string | null;
+  currentImageBase64: string | null;
+  currentImageMimeType: string | null;
+  currentTempScreenshotPath: string | null;
+}
+
 // State Variables
 let chatMessageHistory: ChatMessage[] = [];
 let currentOcrText: string | null = null;
@@ -116,6 +128,10 @@ let currentAssistantMessageDiv: HTMLDivElement | null = null; // ADDED: To hold 
 let currentAssistantContentDiv: HTMLDivElement | null = null; // ADDED: To hold the content part of the assistant's message
 let isAIResponding: boolean = false; // ADDED: Flag to track if AI is currently responding
 let responseCounter: number = 0; // ADDED: Simple counter to prevent stream cross-talk
+
+// Undo functionality state
+let chatBackup: ChatBackup | null = null;
+let canUndo: boolean = false;
 
 // Map to track message divs per response counter
 const responseDivMap = new Map<
@@ -135,7 +151,7 @@ function preprocessLatex(content: string): string {
   // Remove newlines within $$ ... $$ blocks, replacing them with a space
   content = content.replace(/\$\$(.*?)\$\$/gs, (_, innerContent) => {
     // Replace one or more newline characters (Unix, Windows, old Mac) with a single space
-    const cleanedInnerContent = innerContent.replace(/[\n\r]+/g, ' ');
+    const cleanedInnerContent = innerContent.replace(/[\n\r]+/g, " ");
     return `$$${cleanedInnerContent}$$`;
   });
 
@@ -393,7 +409,10 @@ async function addMessageToHistory(
 
   // ADDED: Check if this is the first USER message to show System Prompt
   if (sender === "You" && chatMessageHistory.length === 0) {
-    const { accordion, content: sysPromptContent } = createCustomAccordion("Show System Prompt", "reasoning");
+    const { accordion, content: sysPromptContent } = createCustomAccordion(
+      "Show System Prompt",
+      "reasoning",
+    );
     accordion.style.marginTop = "10px"; // Add some space above the accordion
 
     const pre = document.createElement("pre");
@@ -407,8 +426,10 @@ async function addMessageToHistory(
   if (sender === "You") {
     const selectedModel = modelSelect?.value || ""; // Get current model
 
-    if (imageData) { // Image was captured
-      if (selectedModel.startsWith("gemini-")) { // Gemini model selected
+    if (imageData) {
+      // Image was captured
+      if (selectedModel.startsWith("gemini-")) {
+        // Gemini model selected
         const imageAccordion = ensureImageAccordion(messageDiv); // New function
         const imageContentDiv = imageAccordion.querySelector(".image-preview-content div");
         if (imageContentDiv) {
@@ -421,8 +442,10 @@ async function addMessageToHistory(
           imgElement.style.objectFit = "contain";
           imageContentDiv.appendChild(imgElement);
         }
-      } else { // Non-Gemini (OpenRouter) model selected, but image was captured
-        if (ocrText) { // Show OCR if available
+      } else {
+        // Non-Gemini (OpenRouter) model selected, but image was captured
+        if (ocrText) {
+          // Show OCR if available
           const ocrAccordion = ensureOcrAccordion(messageDiv);
           const ocrContent = ocrAccordion.querySelector(".ocr-content div");
           if (ocrContent) {
@@ -433,7 +456,8 @@ async function addMessageToHistory(
         }
         // No image accordion for OpenRouter models, even if image was captured.
       }
-    } else if (ocrText) { // No image captured, but OCR text is present
+    } else if (ocrText) {
+      // No image captured, but OCR text is present
       const ocrAccordion = ensureOcrAccordion(messageDiv);
       const ocrContent = ocrAccordion.querySelector(".ocr-content div");
       if (ocrContent) {
@@ -471,7 +495,10 @@ async function addMessageToHistory(
 
   // Add reasoning accordion if reasoning is present for assistant messages
   if (sender === "Shard" && reasoning) {
-    const { accordion, content: reasoningContent } = createCustomAccordion("Show Reasoning", "reasoning");
+    const { accordion, content: reasoningContent } = createCustomAccordion(
+      "Show Reasoning",
+      "reasoning",
+    );
     const pre = document.createElement("pre");
     pre.textContent = reasoning;
     reasoningContent.appendChild(pre);
@@ -498,15 +525,15 @@ async function addMessageToHistory(
 // --- Helper to get clean text from contenteditable div ---
 function getTextFromContentEditable(div: HTMLDivElement): string {
   let text = "";
-  div.childNodes.forEach(node => {
+  div.childNodes.forEach((node) => {
     if (node.nodeType === Node.TEXT_NODE) {
       text += node.textContent;
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       // Skip our image wrapper, recurse for other elements like <div> or <p> from paste
       if (!(node as HTMLElement).classList?.contains("inline-image-wrapper")) {
         // Basic handling for block elements to add a newline, might need refinement
-        if (['DIV', 'P', 'BR'].includes((node as HTMLElement).tagName)) {
-          if (text.length > 0 && !text.endsWith('\\n')) text += '\\n'; // Add newline if not already there
+        if (["DIV", "P", "BR"].includes((node as HTMLElement).tagName)) {
+          if (text.length > 0 && !text.endsWith("\\n")) text += "\\n"; // Add newline if not already there
         }
         text += getTextFromContentEditable(node as HTMLDivElement); // Recurse
       }
@@ -515,20 +542,130 @@ function getTextFromContentEditable(div: HTMLDivElement): string {
   return text.trim();
 }
 
-// --- Clear Chat Handler ---
+// --- Helper functions for clear/undo button state management ---
+function updateClearButtonState(isUndoMode: boolean) {
+  if (!clearChatButton || !clearIcon || !undoIcon) return;
+
+  console.log(`[UNDO] Updating button state to ${isUndoMode ? "undo" : "clear"} mode`);
+
+  if (isUndoMode) {
+    // Switch to undo mode with sequential fade transition
+    clearChatButton.title = "Undo Clear";
+
+    // Step 1: Fade out clear icon
+    clearIcon.classList.add("fading-out");
+
+    setTimeout(() => {
+      // Step 2: Hide clear icon and show undo icon
+      clearIcon.classList.add("hidden");
+      clearIcon.classList.remove("fading-out");
+      undoIcon.classList.remove("hidden");
+      undoIcon.classList.add("fading-in");
+
+      setTimeout(() => {
+        // Step 3: Fade in undo icon
+        undoIcon.classList.remove("fading-in");
+      }, 10); // Small delay to ensure DOM update
+    }, 100);
+  } else {
+    // Switch to clear mode with sequential fade transition
+    clearChatButton.title = "Clear Chat";
+
+    // Step 1: Fade out undo icon
+    undoIcon.classList.add("fading-out");
+
+    setTimeout(() => {
+      // Step 2: Hide undo icon and show clear icon
+      undoIcon.classList.add("hidden");
+      undoIcon.classList.remove("fading-out");
+      clearIcon.classList.remove("hidden");
+      clearIcon.classList.add("fading-in");
+
+      setTimeout(() => {
+        // Step 3: Fade in clear icon
+        clearIcon.classList.remove("fading-in");
+      }, 10); // Small delay to ensure DOM update
+    }, 100);
+  }
+}
+
+function createChatBackup(): ChatBackup {
+  const backup = {
+    chatMessageHistory: [...chatMessageHistory], // Deep copy array
+    chatHistoryHTML: chatHistory?.innerHTML || "",
+    currentOcrText,
+    currentImageBase64,
+    currentImageMimeType,
+    currentTempScreenshotPath,
+  };
+  console.log("[UNDO] Created backup:", {
+    messageCount: backup.chatMessageHistory.length,
+    htmlLength: backup.chatHistoryHTML.length,
+    hasOcrText: !!backup.currentOcrText,
+    hasImage: !!backup.currentImageBase64,
+  });
+  return backup;
+}
+
+function restoreChatFromBackup(backup: ChatBackup) {
+  console.log("[UNDO] Restoring backup:", {
+    messageCount: backup.chatMessageHistory.length,
+    htmlLength: backup.chatHistoryHTML.length,
+    hasOcrText: !!backup.currentOcrText,
+    hasImage: !!backup.currentImageBase64,
+  });
+  chatMessageHistory = [...backup.chatMessageHistory]; // Restore array
+  if (chatHistory) chatHistory.innerHTML = backup.chatHistoryHTML; // Restore DOM
+  currentOcrText = backup.currentOcrText;
+  currentImageBase64 = backup.currentImageBase64;
+  currentImageMimeType = backup.currentImageMimeType;
+  currentTempScreenshotPath = backup.currentTempScreenshotPath;
+  console.log("[UNDO] Restored state:", {
+    newMessageCount: chatMessageHistory.length,
+    htmlRestored: chatHistory?.innerHTML.length || 0,
+  });
+}
+
+function resetUndoState() {
+  console.log("[UNDO] Resetting undo state");
+  chatBackup = null;
+  canUndo = false;
+  updateClearButtonState(false);
+}
+
+// --- Combined Clear/Undo Chat Handler ---
+async function handleClearOrUndoChat() {
+  console.log(
+    `[UNDO] handleClearOrUndoChat called - canUndo: ${canUndo}, hasBackup: ${!!chatBackup}`,
+  );
+  if (canUndo && chatBackup) {
+    // Perform undo operation
+    console.log("[UNDO] Performing undo operation");
+    await undoChatClear();
+  } else {
+    // Perform clear operation
+    console.log("[UNDO] Performing clear operation");
+    await clearChatHistory();
+  }
+}
+
 async function clearChatHistory() {
-  const bodyElement = document.body;
+  // Create backup before clearing
+  chatBackup = createChatBackup();
 
   console.log("Starting fade out for chat clear...");
-  bodyElement.classList.add("fade-out");
-  bodyElement.classList.remove("fade-in");
+  chatHistory.classList.add("fade-out");
+  chatHistory.classList.remove("fade-in");
+  chatHistory.classList.remove("fade-in");
 
   setTimeout(async () => {
     if (chatHistory) chatHistory.innerHTML = "";
     console.log("Chat history cleared.");
     chatMessageHistory = [];
 
-    if (clearChatButton) clearChatButton.classList.add("hidden");
+    // Don't hide the button, just change its state to undo mode
+    canUndo = true;
+    updateClearButtonState(true);
 
     if (currentTempScreenshotPath) {
       console.log("Cleanup requested for temp screenshot:", currentTempScreenshotPath);
@@ -539,6 +676,8 @@ async function clearChatHistory() {
         console.error("Error cleaning up temp screenshot via clearInlineImageAndData:", err);
       }
     }
+    // Don't reset state variables here - they're needed for undo
+    // Only clear the current variables after backup is created
     currentOcrText = null;
     currentImageBase64 = null;
     currentTempScreenshotPath = null;
@@ -546,15 +685,42 @@ async function clearChatHistory() {
 
     if (statusMessage) statusMessage.textContent = "";
 
-    // updateInputAreaLayout(); // Call AFTER fade-in completes for accurate measurement
-
     console.log("Starting fade in after chat clear...");
-    bodyElement.classList.remove("fade-out");
+    chatHistory.classList.remove("fade-out");
     setTimeout(() => {
-      bodyElement.classList.remove("fade-in");
+      chatHistory.classList.remove("fade-in");
       updateInputAreaLayout(); // ADDED: Update layout AFTER fade-in completes
-    }, FADE_DURATION);
-  }, FADE_DURATION);
+    }, FADE_DURATION_CHATHISTORY);
+  }, FADE_DURATION_CHATHISTORY);
+}
+
+async function undoChatClear() {
+  if (!chatBackup) return;
+
+  console.log("Starting fade out for chat undo...");
+  chatHistory.classList.add("fade-out");
+  chatHistory.classList.remove("fade-in");
+
+  setTimeout(async () => {
+    // Restore from backup
+    restoreChatFromBackup(chatBackup!);
+    console.log(
+      "[UNDO] Chat history restored from backup - messages restored:",
+      chatMessageHistory.length,
+    );
+
+    // Reset undo state
+    resetUndoState();
+
+    if (statusMessage) statusMessage.textContent = "";
+
+    console.log("Starting fade in after chat undo...");
+    chatHistory.classList.remove("fade-out");
+    setTimeout(() => {
+      chatHistory.classList.remove("fade-in");
+      updateInputAreaLayout(); // Update layout AFTER fade-in completes
+    }, FADE_DURATION_CHATHISTORY);
+  }, FADE_DURATION_CHATHISTORY);
 }
 
 // --- ADDED: New function to clear inline image and associated data ---
@@ -706,7 +872,11 @@ async function handleCaptureOcr() {
       if (currentImageBase64 || currentOcrText) {
         statusMessage.textContent = currentImageBase64 ? "Image captured." : "OCR text captured.";
         setTimeout(() => {
-          if (statusMessage && (statusMessage.textContent === "Image captured." || statusMessage.textContent === "OCR text captured.")) {
+          if (
+            statusMessage &&
+            (statusMessage.textContent === "Image captured." ||
+              statusMessage.textContent === "OCR text captured.")
+          ) {
             statusMessage.style.display = "none";
             statusMessage.textContent = "";
           }
@@ -760,7 +930,6 @@ async function handleSendMessage() {
     return;
   }
 
-
   addMessageToHistory("You", textToDisplay, null, tempOcrTextForAccordion, imagePayloadForMessage);
 
   const messagesToSendToBackend = [...chatMessageHistory];
@@ -770,6 +939,9 @@ async function handleSendMessage() {
   messageInput.title = "";
   messageInput.contentEditable = "false"; // ADDED: Disable input during AI response
   updatePlaceholderState();
+
+  // Reset undo state when sending new message
+  resetUndoState();
 
   // Show clear button if it was hidden
   if (clearChatButton?.classList.contains("hidden")) {
@@ -855,7 +1027,6 @@ async function handleSendMessage() {
 
     // The rest of the logic (removeThinkingIndicator, addMessageToHistory for Shard)
     // will now be handled by the STREAM_CHUNK, STREAM_END, and STREAM_ERROR event listeners.
-
   } catch (error) {
     console.error("Failed to invoke send_text_to_model:", error);
     if (currentAssistantMessageDiv) {
@@ -2370,7 +2541,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       updateInputAreaLayout();
     });
 
-    messageInput.addEventListener("keydown", async (event) => { // Changed to keydown for Backspace
+    messageInput.addEventListener("keydown", async (event) => {
+      // Changed to keydown for Backspace
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         await handleSendMessage();
@@ -2378,9 +2550,12 @@ window.addEventListener("DOMContentLoaded", async () => {
         const textContent = getTextFromContentEditable(messageInput);
         // Check if the div is visually empty (only contains our image wrapper or is truly empty)
         const firstChild = messageInput.firstChild;
-        const isEffectivelyEmpty = !textContent ||
-          (firstChild && (firstChild as HTMLElement).classList?.contains('inline-image-wrapper') && !firstChild.nextSibling && messageInput.textContent?.trim() === "");
-
+        const isEffectivelyEmpty =
+          !textContent ||
+          (firstChild &&
+            (firstChild as HTMLElement).classList?.contains("inline-image-wrapper") &&
+            !firstChild.nextSibling &&
+            messageInput.textContent?.trim() === "");
 
         if (isEffectivelyEmpty && currentImageBase64) {
           event.preventDefault();
@@ -2412,7 +2587,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   if (clearChatButton) {
-    clearChatButton.addEventListener("click", clearChatHistory);
+    clearChatButton.addEventListener("click", handleClearOrUndoChat);
   }
 
   // Model selection change listener
@@ -2441,6 +2616,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 // --- Event Listener for Window Toggle ---
 const FADE_DURATION = 300; // ms - Should match CSS transition duration
+const FADE_DURATION_CHATHISTORY = 200; // ms - Should match CSS transition duration
 
 // --- Function to handle clicks outside the settings panel ---
 function handleClickOutsideSettings(event: MouseEvent) {
@@ -2523,7 +2699,8 @@ function createCustomAccordion(
     accordion.className = "reasoning-accordion";
   } else if (type === "ocr") {
     accordion.className = "ocr-accordion";
-  } else if (type === "image-preview") { // New type
+  } else if (type === "image-preview") {
+    // New type
     accordion.className = "image-preview-accordion";
   } else {
     accordion.className = "web-search-accordion"; // Keep general class for web-search style
@@ -2534,7 +2711,8 @@ function createCustomAccordion(
     toggle.className = "reasoning-accordion-toggle";
   } else if (type === "ocr") {
     toggle.className = "ocr-accordion-toggle";
-  } else if (type === "image-preview") { // New type
+  } else if (type === "image-preview") {
+    // New type
     toggle.className = "image-preview-accordion-toggle";
   } else {
     toggle.className = "web-search-accordion-toggle";
@@ -2548,7 +2726,8 @@ function createCustomAccordion(
     content.className = "reasoning-content";
   } else if (type === "ocr") {
     content.className = "ocr-content";
-  } else if (type === "image-preview") { // New type
+  } else if (type === "image-preview") {
+    // New type
     content.className = "image-preview-content"; // Div to hold the image preview
   } else {
     content.className = "web-search-content"; // Keep general class

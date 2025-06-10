@@ -42,7 +42,6 @@ body {
     -moz-osx-font-smoothing: grayscale;
     height: 100%; /* Use min-height */
     overflow: hidden; /* Prevent scrollbars on body */
-    /* Add the radial gradient background */
 }
 
 /* Container */
@@ -61,7 +60,7 @@ body {
     background: radial-gradient(
         circle at bottom left,
         rgba(80, 80, 80, 0.8) 0%,
-        transparent 30%
+        transparent 25%
     ); /* Adjust color/opacity/stop % as needed */
     height: 100vh; /* Ensure container takes full viewport height */
 }

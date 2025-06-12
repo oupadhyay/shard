@@ -9,7 +9,7 @@ A Tauri application for easy interaction with AI models.
 *   Chat Interface with Streamed Responses
 *   Free Models (DeepSeek V3, Gemini Flash, DeepSeek R1)
 *   API Key Management (OpenRouter & Google)
-*   Screen Capture + OCR Analysis (Requires Tesseract)
+*   Screen Capture + OCR Analysis (Built-in)
 *   Markdown & LaTeX Rendering
 *   Background Panel Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt
@@ -22,33 +22,9 @@ A Tauri application for easy interaction with AI models.
 
 Feel free to add more ideas in the Issues or contribute to the project with a PR!
 
-## IMPORTANT: Prerequisites
+## Prerequisites
 
-For the OCR feature to work, you **MUST** have Tesseract OCR installed on your system. The application uses the `rust-tesseract` crate, which relies on a system installation of Tesseract.
-
-### Installation Instructions
-
-*   **macOS (using Homebrew):**
-    ```bash
-    brew install tesseract
-    brew install tesseract-lang # Installs all language packs
-    ```
-*   **Windows:**
-    *   Download an installer from the official Tesseract documentation or repositories like [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki). Ensure you select the desired language packs during installation.
-    *   **Crucially**, you must add the Tesseract installation directory to your system's `PATH` environment variable so the application can find it.
-*   **Linux (Debian/Ubuntu):**
-    ```bash
-    sudo apt update
-    sudo apt install tesseract-ocr
-    sudo apt install tesseract-ocr-eng # Or other languages like tesseract-ocr-all
-    ```
-*   **Linux (Fedora):**
-    ```bash
-    sudo dnf install tesseract
-    sudo dnf install tesseract-langpack-eng # Or other languages
-    ```
-
-Please refer to the [official Tesseract documentation](https://tesseract-ocr.github.io/tessdoc/) for the most up-to-date installation instructions for your specific operating system.
+Shard comes with built-in OCR capabilities and doesn't require any additional system installations. The application includes all necessary components for text recognition.
 
 ## Development
 

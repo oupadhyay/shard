@@ -3,6 +3,7 @@
 use arxiv_tools::Paper as ArXivPaper; // SortOrder as ArXivSortOrder};
 use base64::{engine::general_purpose, Engine as _}; // Added base64 import
 use image::{DynamicImage, ImageFormat};
+use leptess::{LepTess, Variable};
 use quick_xml::de::from_str;
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,6 @@ use tauri_nspanel::{panel_delegate, Panel}; // Added for panel delegate
 use tauri_plugin_global_shortcut::{
     self as tauri_gs, GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState,
 };
-use tesseract; // Uncommented
 use time::OffsetDateTime;
 use urlencoding; // Added urlencoding crate for URL encoding
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
@@ -37,7 +37,7 @@ static CANCELLED_STREAM_ID: AtomicU64 = AtomicU64::new(u64::MAX); // Use MAX as 
 enum FeedChild {
     #[serde(rename = "entry")]
     Entry(ArxivEntry), // For <entry> tags
-    #[serde(other)]    // Catches any other tags like <link>, <title>, <id>, <updated> under <feed>
+    #[serde(other)] // Catches any other tags like <link>, <title>, <id>, <updated> under <feed>
     Other,
 }
 
@@ -59,7 +59,7 @@ struct ArxivEntry {
     #[serde(rename = "author", default)]
     authors: Vec<ArxivAuthor>,
     #[serde(rename = "link", default)] // XML tag is still "link"
-    entry_links: Vec<ArxivLink>,      // Rust field name changed from 'links' to 'entry_links'
+    entry_links: Vec<ArxivLink>, // Rust field name changed from 'links' to 'entry_links'
     #[serde(rename = "primary_category", default)]
     primary_category: Option<ArxivCategory>,
     #[serde(rename = "category", default)]
@@ -173,7 +173,7 @@ struct ChatMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     image_base64_data: Option<String>, // Base64 encoded image from frontend
     #[serde(skip_serializing_if = "Option::is_none")]
-    image_mime_type: Option<String>,   // E.g., "image/png", "image/jpeg"
+    image_mime_type: Option<String>, // E.g., "image/png", "image/jpeg"
 
     // Internal field for backend use after uploading, not directly set by frontend for sending
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,7 +217,9 @@ struct GeminiFileUri {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)] // Allows different structures (e.g., text vs. image part)
 enum GeminiPart {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     FileData {
         #[serde(rename = "fileData")]
         file_data: GeminiFileUri,
@@ -519,7 +521,8 @@ fn separate_reasoning_from_content(text: &str) -> (String, String) {
                         // Last line is probably content, rest is reasoning
                         let reasoning_part =
                             lines_in_section[..lines_in_section.len() - 1].join("\n");
-                        let content_part = lines_in_section.last()
+                        let content_part = lines_in_section
+                            .last()
                             .expect("Failed to get last line of reasoning section");
 
                         if !reasoning_part.trim().is_empty() {
@@ -656,72 +659,54 @@ async fn perform_wikipedia_lookup(
 }
 
 // --- Screen Capture & OCR Helper Functions ---
-// Uncommented and kept as is
-fn ocr_image_buffer(app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result<String, String> {
-    log::info!("Starting OCR process with tesseract crate for an image buffer.");
-    let temp_dir_result = app_handle.path().app_cache_dir();
-    let temp_dir = temp_dir_result.map_err(|e| {
-        log::error!("Failed to get app cache directory: {}", e);
-        format!("Failed to get app cache directory: {}", e)
-    })?;
-    if !temp_dir.exists() {
-        fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
-    }
-    let temp_filename = format!("{}.png", Uuid::new_v4().to_string());
-    let temp_file_path = temp_dir.join(&temp_filename);
+fn ocr_image_buffer(_app_handle: &AppHandle, img_buffer: &DynamicImage) -> Result<String, String> {
+    log::info!("Starting OCR process with leptess for an image buffer");
 
-    log::info!(
-        "Saving image to temporary file for OCR: {:?}",
-        temp_file_path
-    );
+    // Convert the image to a PNG byte vector
+    let mut img_bytes: Vec<u8> = Vec::new();
     img_buffer
-        .save_with_format(&temp_file_path, ImageFormat::Png)
+        .write_to(&mut Cursor::new(&mut img_bytes), ImageFormat::Png)
         .map_err(|e| {
-            log::error!("Failed to save image to temp file: {}", e);
-            format!("Failed to save image to temp file: {}", e)
+            log::error!("Failed to convert image to PNG: {}", e);
+            format!("Failed to convert image to PNG: {}", e)
         })?;
 
-    let ocr_text_result = || -> Result<String, String> {
-        tesseract::Tesseract::new(None, Some("eng")).map_err(|e| {
-            log::error!("Failed to initialize Tesseract: {}", e.to_string());
-            format!("Tesseract init failed: {}. Ensure Tesseract OCR is installed and in PATH.", e.to_string())
-        })?
-        .set_image(&temp_file_path.to_string_lossy()).map_err(|e| {
-            log::error!("Tesseract: Failed to set image: {}", e.to_string());
-            format!("Tesseract failed to set image: {}", e.to_string())
-        })?
-        .set_variable("tessedit_char_whitelist", "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[]^_`{|}~ ").map_err(|e| {
-            log::error!("Tesseract: Failed critically setting char whitelist: {}", e.to_string());
-            format!("Tesseract failed to set variable: {}\nEnsure whitelist characters are valid.", e.to_string())
-        })?
-        .get_text().map_err(|e| {
-            log::error!("Tesseract: Failed to get text: {}", e.to_string());
-            format!("Tesseract failed to get text: {}", e.to_string())
-        })
-    }();
-
-    // Cleanup of the temporary file saved by ocr_image_buffer
-    if let Err(e) = fs::remove_file(&temp_file_path) {
-        log::warn!(
-            "Failed to remove temporary OCR file {:?}: {}",
-            temp_file_path,
-            e
-        );
-    } else {
-        log::info!("Temporary OCR file removed: {:?}", temp_file_path);
-    }
-
-    match ocr_text_result {
-        Ok(text) => {
-            log::info!(
-                "OCR successful. Text found (first 150 chars): {:.150}",
-                text.replace("\n", " ")
-            );
-            Ok(text)
+    // Initialize Tesseract with leptess
+    let mut lt = match LepTess::new(None, "eng") {
+        Ok(lt) => lt,
+        Err(e) => {
+            log::error!("Failed to initialize Tesseract: {}", e);
+            return Err(format!("Failed to initialize Tesseract: {}", e));
         }
-        Err(e) => Err(e),
+    };
+
+    // Set Tesseract parameters
+    if let Err(e) = lt.set_variable(Variable::TesseditCharWhitelist, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[]^_`{|}~ ") {
+        log::warn!("Failed to set Tesseract character whitelist: {}", e);
+        // Continue even if whitelist fails
     }
+
+    // Set the image from memory
+    if let Err(e) = lt.set_image_from_mem(&img_bytes) {
+        log::error!("Failed to set image for OCR: {}", e);
+        return Err(format!("Failed to set image for OCR: {}", e));
+    }
+
+    // Perform OCR
+    let text = match lt.get_utf8_text() {
+        Ok(text) => text,
+        Err(e) => {
+            log::error!("OCR failed: {}", e);
+            return Err(format!("OCR failed: {}", e));
+        }
+    };
+
+    log::info!(
+        "OCR successful. Text found (first 150 chars): {:.150}",
+        text.replace("\n", " ")
+    );
+
+    Ok(text)
 }
 
 // --- ADDED: Helper function to extract stock symbol ---
@@ -1761,14 +1746,29 @@ async fn send_text_to_model(
     if model_name.starts_with("gemini-") || model_name.starts_with("google/") {
         if let Some(gemini_key) = &config.gemini_api_key {
             if !gemini_key.is_empty() {
-                for msg in final_messages.iter_mut() { // Modify final_messages directly
-                    if let (Some(base64_data), Some(mime_type)) = (&msg.image_base64_data, &msg.image_mime_type) {
+                for msg in final_messages.iter_mut() {
+                    // Modify final_messages directly
+                    if let (Some(base64_data), Some(mime_type)) =
+                        (&msg.image_base64_data, &msg.image_mime_type)
+                    {
                         // Only upload if URI is not already set
                         if msg.image_file_api_uri.is_none() {
-                            log::info!("Message has image data, attempting upload to Gemini File API...");
-                            match upload_image_to_gemini_file_api(&client, base64_data, mime_type, gemini_key).await {
+                            log::info!(
+                                "Message has image data, attempting upload to Gemini File API..."
+                            );
+                            match upload_image_to_gemini_file_api(
+                                &client,
+                                base64_data,
+                                mime_type,
+                                gemini_key,
+                            )
+                            .await
+                            {
                                 Ok(file_uri_details) => {
-                                    log::info!("Image uploaded successfully, URI: {}", file_uri_details.file_uri);
+                                    log::info!(
+                                        "Image uploaded successfully, URI: {}",
+                                        file_uri_details.file_uri
+                                    );
                                     msg.image_file_api_uri = Some(file_uri_details.file_uri);
                                     msg.image_mime_type = Some(file_uri_details.mime_type);
                                     msg.image_base64_data = None; // Clear base64 after successful upload
@@ -1802,7 +1802,7 @@ async fn send_text_to_model(
         log::info!("Using Gemini API for model: {}", model_name);
 
         match call_gemini_api(
-            &client, // Pass client
+            &client,        // Pass client
             final_messages, // Pass the directly modified final_messages
             gemini_api_key,
             model_name.replace("google/", ""),
@@ -2020,8 +2020,11 @@ async fn call_gemini_api(
                 let mut parts: Vec<GeminiPart> = Vec::new();
 
                 // Add image part first if available (File API URI)
-                if let (Some(file_uri), Some(mime_type)) = (&chat_msg.image_file_api_uri, &chat_msg.image_mime_type) {
-                    parts.push(GeminiPart::FileData { // Corrected: Use enum variant
+                if let (Some(file_uri), Some(mime_type)) =
+                    (&chat_msg.image_file_api_uri, &chat_msg.image_mime_type)
+                {
+                    parts.push(GeminiPart::FileData {
+                        // Corrected: Use enum variant
                         file_data: GeminiFileUri {
                             mime_type: mime_type.clone(),
                             file_uri: file_uri.clone(),
@@ -2034,7 +2037,9 @@ async fn call_gemini_api(
                 // }
 
                 // Always add text part
-                parts.push(GeminiPart::Text { text: chat_msg.content }); // Corrected: Use enum variant
+                parts.push(GeminiPart::Text {
+                    text: chat_msg.content,
+                }); // Corrected: Use enum variant
 
                 GeminiContent {
                     parts,
@@ -2111,12 +2116,15 @@ async fn call_gemini_api(
                                                         if let Some(part) =
                                                             candidate.content.parts.get(0)
                                                         {
-                                                            let content_text = match part { // Corrected: Destructure GeminiPart
+                                                            let content_text = match part {
+                                                                // Corrected: Destructure GeminiPart
                                                                 GeminiPart::Text { text } => text,
                                                                 GeminiPart::FileData { .. } => "", // Or handle appropriately if FileData can appear here
                                                             };
 
-                                                            if model_identifier_from_config.ends_with("#thinking-enabled") {
+                                                            if model_identifier_from_config
+                                                                .ends_with("#thinking-enabled")
+                                                            {
                                                                 // Parse reasoning from content only for thinking-enabled models
                                                                 let (content, reasoning) =
                                                                     separate_reasoning_from_content(
@@ -2129,7 +2137,8 @@ async fn call_gemini_api(
                                                                 }
                                                             } else {
                                                                 // For non-thinking models, use the content as is
-                                                                current_chunk_content = content_text.to_string();
+                                                                current_chunk_content =
+                                                                    content_text.to_string();
                                                                 // current_chunk_reasoning remains None
                                                             }
 
@@ -2212,11 +2221,12 @@ async fn call_gemini_api(
                     log::info!("Gemini stream ended due to cancellation");
 
                     // Final separation of reasoning from content for cancelled stream
-                    let (final_content, final_reasoning) = if model_identifier_from_config.ends_with("#thinking-enabled") {
-                        separate_reasoning_from_content(&accumulated_content)
-                    } else {
-                        (accumulated_content.clone(), String::new())
-                    };
+                    let (final_content, final_reasoning) =
+                        if model_identifier_from_config.ends_with("#thinking-enabled") {
+                            separate_reasoning_from_content(&accumulated_content)
+                        } else {
+                            (accumulated_content.clone(), String::new())
+                        };
 
                     let _ = window.emit(
                         "STREAM_END",
@@ -2237,11 +2247,12 @@ async fn call_gemini_api(
                     );
 
                     // Final separation of reasoning from content for stream end
-                    let (final_content, final_reasoning) = if model_identifier_from_config.ends_with("#thinking-enabled") {
-                        separate_reasoning_from_content(&accumulated_content)
-                    } else {
-                        (accumulated_content.clone(), String::new())
-                    };
+                    let (final_content, final_reasoning) =
+                        if model_identifier_from_config.ends_with("#thinking-enabled") {
+                            separate_reasoning_from_content(&accumulated_content)
+                        } else {
+                            (accumulated_content.clone(), String::new())
+                        };
 
                     let _ = window.emit(
                         "STREAM_END",
@@ -2546,12 +2557,10 @@ async fn call_openrouter_api(
                 // Parse error response for better rate limit message
                 let error_msg = if status == 429 {
                     match serde_json::from_str::<serde_json::Value>(&error_text) {
-                        Ok(json) => {
-                            json["error"]["message"]
-                                .as_str()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "Rate limit exceeded".to_string())
-                        }
+                        Ok(json) => json["error"]["message"]
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "Rate limit exceeded".to_string()),
                         Err(_) => format!("API request failed: {} - {}", status, error_text),
                     }
                 } else {
@@ -2638,14 +2647,16 @@ async fn call_gemini_api_non_streaming(
                     Ok(gemini_response) => {
                         if let Some(candidate) = gemini_response.candidates.get(0) {
                             if let Some(part) = candidate.content.parts.get(0) {
-                                match part { // Corrected: Destructure GeminiPart
+                                match part {
+                                    // Corrected: Destructure GeminiPart
                                     GeminiPart::Text { text } => {
                                         log::debug!("Non-streaming Gemini response text: {}", text);
                                         Ok(text.clone())
                                     }
-                                    GeminiPart::FileData { .. } => {
-                                        Err("Non-streaming Gemini response: Unexpected FileData part".to_string())
-                                    }
+                                    GeminiPart::FileData { .. } => Err(
+                                        "Non-streaming Gemini response: Unexpected FileData part"
+                                            .to_string(),
+                                    ),
                                 }
                             } else {
                                 Err("Non-streaming Gemini response: No content parts found"
@@ -3535,9 +3546,7 @@ async fn extract_arxiv_query_parameters(
 }
 
 // Helper function to clean titles for ArXiv search
-fn clean_title(
-    title_str: &str,
-) -> String {
+fn clean_title(title_str: &str) -> String {
     title_str
         .replace('-', " ")
         .replace('–', " ")
@@ -3654,7 +3663,8 @@ async fn perform_arxiv_lookup(
                                 }
 
                                 // Now process actual_entries like before
-                                for entry in actual_entries { // MODIFIED: Iterate over actual_entries
+                                for entry in actual_entries {
+                                    // MODIFIED: Iterate over actual_entries
                                     let paper_id = entry.id.unwrap_or_default();
                                     let mut title = entry.title.unwrap_or_default();
                                     title = clean_title(&title);
@@ -3671,7 +3681,8 @@ async fn perform_arxiv_lookup(
                                         .collect();
 
                                     let mut pdf_url_option: Option<String> = None;
-                                    for link in entry.entry_links { // MODIFIED: was entry.links
+                                    for link in entry.entry_links {
+                                        // MODIFIED: was entry.links
                                         // MODIFIED: Clone link.href for the first check to avoid move issues
                                         if let (Some(href), Some(title_attr)) =
                                             (link.href.clone(), link.title)
@@ -3795,13 +3806,24 @@ async fn upload_image_to_gemini_file_api(
     );
 
     #[derive(Serialize)]
-    struct FileMetadata<'a> { display_name: &'a str }
+    struct FileMetadata<'a> {
+        display_name: &'a str,
+    }
     #[derive(Serialize)]
-    struct InitialUploadRequestPayload<'a> { file: FileMetadata<'a> }
+    struct InitialUploadRequestPayload<'a> {
+        file: FileMetadata<'a>,
+    }
 
-    let initial_payload = InitialUploadRequestPayload { file: FileMetadata { display_name: &display_name } };
+    let initial_payload = InitialUploadRequestPayload {
+        file: FileMetadata {
+            display_name: &display_name,
+        },
+    };
 
-    log::info!("Starting Gemini File API upload (Step 1: Start) for display_name: {}", display_name);
+    log::info!(
+        "Starting Gemini File API upload (Step 1: Start) for display_name: {}",
+        display_name
+    );
 
     let start_response_result = client
         .post(&initial_upload_url)
@@ -3821,23 +3843,42 @@ async fn upload_image_to_gemini_file_api(
 
     let start_status = start_response.status(); // Get status before consuming response
     if !start_status.is_success() {
-        let error_body = start_response.text().await.unwrap_or_else(|_| "Unknown error during file upload start".to_string());
-        return Err(format!("Gemini File API (start) failed with status {}: {}", start_status, error_body));
+        let error_body = start_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error during file upload start".to_string());
+        return Err(format!(
+            "Gemini File API (start) failed with status {}: {}",
+            start_status, error_body
+        ));
     }
 
     let upload_url_from_header = start_response
         .headers()
         .get("x-goog-upload-url")
-        .ok_or_else(|| "Gemini File API (start) response missing x-goog-upload-url header".to_string())?
+        .ok_or_else(|| {
+            "Gemini File API (start) response missing x-goog-upload-url header".to_string()
+        })?
         .to_str()
-        .map_err(|e| format!("Gemini File API (start) x-goog-upload-url header invalid: {}", e))?
+        .map_err(|e| {
+            format!(
+                "Gemini File API (start) x-goog-upload-url header invalid: {}",
+                e
+            )
+        })?
         .to_string();
 
-    log::info!("Gemini File API upload (Step 1: Start) successful. Upload URL: {}", upload_url_from_header);
+    log::info!(
+        "Gemini File API upload (Step 1: Start) successful. Upload URL: {}",
+        upload_url_from_header
+    );
 
     // Step 3: POST image bytes to upload_url
     // As per Gemini docs (curl example), the data upload uses POST with "upload, finalize"
-    log::info!("Starting Gemini File API upload (Step 2: Upload Bytes) to: {}", upload_url_from_header);
+    log::info!(
+        "Starting Gemini File API upload (Step 2: Upload Bytes) to: {}",
+        upload_url_from_header
+    );
     let upload_response_result = client
         .post(&upload_url_from_header) // Using POST for the data chunk
         .header("X-Goog-Upload-Offset", "0")
@@ -3854,31 +3895,48 @@ async fn upload_image_to_gemini_file_api(
 
     let upload_status = upload_response.status(); // Get status before consuming response
     if !upload_status.is_success() {
-        let error_body = upload_response.text().await.unwrap_or_else(|_| "Unknown error during file upload".to_string());
-        return Err(format!("Gemini File API (upload) failed with status {}: {}", upload_status, error_body));
+        let error_body = upload_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error during file upload".to_string());
+        return Err(format!(
+            "Gemini File API (upload) failed with status {}: {}",
+            upload_status, error_body
+        ));
     }
 
     #[derive(Deserialize, Debug)]
     struct UploadedFileDetails {
         // name: String,
-        #[serde(rename = "uri")] file_uri: String,
-        #[serde(rename = "mimeType")] mime_type: String
+        #[serde(rename = "uri")]
+        file_uri: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
     }
     #[derive(Deserialize, Debug)]
-    struct FileApiUploadResponse { file: UploadedFileDetails }
+    struct FileApiUploadResponse {
+        file: UploadedFileDetails,
+    }
 
-    let response_json = match upload_response.json::<FileApiUploadResponse>().await { // upload_response is consumed here
+    let response_json = match upload_response.json::<FileApiUploadResponse>().await {
+        // upload_response is consumed here
         Ok(json) => json,
         Err(e) => {
             // If .json() fails, we can't use upload_response.text() anymore because it's consumed.
             // The error 'e' from .json() should ideally contain enough info.
             // Or, we would need to read the body as text first, then try to parse if status was success.
             // For now, just returning the parsing error.
-            return Err(format!("Gemini File API (upload) response JSON parse error: {}. Status was {}", e, upload_status));
+            return Err(format!(
+                "Gemini File API (upload) response JSON parse error: {}. Status was {}",
+                e, upload_status
+            ));
         }
     };
 
-    log::info!("Gemini File API upload (Step 2: Upload Bytes) successful. File URI: {}", response_json.file.file_uri);
+    log::info!(
+        "Gemini File API upload (Step 2: Upload Bytes) successful. File URI: {}",
+        response_json.file.file_uri
+    );
 
     Ok(GeminiFileUri {
         mime_type: response_json.file.mime_type, // Use mimeType from response

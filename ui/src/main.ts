@@ -774,7 +774,7 @@ async function handleCaptureOcr() {
     statusMessage.style.display = "block";
   }
   // Clear previous capture state *before* starting new capture
-  await clearInlineImageAndData(); // Use new function to clear any existing inline image and data
+  await clearInlineImageAndData()
 
   // Visually indicate loading
   if (ocrIconContainer) ocrIconContainer.style.opacity = "0.5";
@@ -809,6 +809,11 @@ async function handleCaptureOcr() {
       const img = document.createElement("img");
       img.src = `data:${currentImageMimeType};base64,${currentImageBase64}`;
       img.alt = "Captured image";
+
+      // ADDED: Update layout *after* the image has loaded and has dimensions
+      img.onload = () => {
+        updateInputAreaLayout();
+      };
       // Add data attributes if needed for other purposes, e.g., temp path
       if (currentTempScreenshotPath) {
         img.setAttribute("data-temp-path", currentTempScreenshotPath);
@@ -900,9 +905,9 @@ async function handleCaptureOcr() {
       }, 5000);
     }
   } finally {
-    updateInputAreaLayout();
     if (ocrIconContainer) ocrIconContainer.style.opacity = "1.0";
     messageInput.focus();
+    updateInputAreaLayout();
   }
 }
 
@@ -1247,7 +1252,7 @@ function getStreamingDots(): HTMLSpanElement {
   return dotsContainer;
 }
 
-// --- ADDED: Helper function to create Globe Icon ---
+// --- Functions to create icons ---
 function createGlobeIcon(): SVGSVGElement {
   const svgNS = "http://www.w3.org/2000/svg";
   const icon = document.createElementNS(svgNS, "svg");
@@ -1278,8 +1283,6 @@ function createGlobeIcon(): SVGSVGElement {
 
   return icon;
 }
-
-// --- Function to create icons ---
 
 function createThermometerIcon(): SVGSVGElement {
   const svgNS = "http://www.w3.org/2000/svg";
@@ -1317,7 +1320,6 @@ function createFinancialIcon(): SVGSVGElement {
   return icon;
 }
 
-// --- ADDED: Helper function to create ArXiv Icon (Book Icon) ---
 function createArxivIcon(): SVGSVGElement {
   const svgNS = "http://www.w3.org/2000/svg";
   const icon = document.createElementNS(svgNS, "svg");

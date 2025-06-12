@@ -1,6 +1,6 @@
 [package]
 name = "Shard"
-version = "0.6.3"
+version = "0.6.4"
 description = "An AI Research Companion Built on Rust & Tauri"
 authors = ["oupadhyay"]
 license = "MIT"
@@ -28,7 +28,7 @@ toml = "0.8.13"
 window-vibrancy = "0.6.0"
 image = { version = "0.25", features = ["png", "jpeg"] }
 screenshots = "0.6"
-tesseract = "0.14"
+leptess = { version = "0.14.0" }
 uuid = { version = "1.9.1", features = ["v4", "serde"] }
 tauri-plugin-log = "2.0.0-rc"
 arboard = { version = "3.4.0", features = ["image-data"] }

@@ -774,7 +774,7 @@ async function handleCaptureOcr() {
     statusMessage.style.display = "block";
   }
   // Clear previous capture state *before* starting new capture
-  await clearInlineImageAndData()
+  await clearInlineImageAndData();
 
   // Visually indicate loading
   if (ocrIconContainer) ocrIconContainer.style.opacity = "0.5";
@@ -2690,6 +2690,20 @@ listen("toggle-main-window", async () => {
 });
 
 console.log("Frontend listener for toggle-main-window set up.");
+
+// Listen for OCR trigger event from global shortcut
+listen("trigger-ocr-capture", async () => {
+  console.log("trigger-ocr-capture event received from backend!");
+
+  try {
+    await handleCaptureOcr();
+    console.log("[OCR Shortcut] OCR capture triggered successfully.");
+  } catch (error) {
+    console.error("[OCR Shortcut] Error triggering OCR capture:", error);
+  }
+});
+
+console.log("Frontend listener for trigger-ocr-capture set up.");
 
 // Custom accordion helper functions
 function createCustomAccordion(

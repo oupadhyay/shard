@@ -2,7 +2,7 @@
 
 A Tauri application for easy interaction with AI models.
 
-**Note:** Control (⌃) + Space is the shortcut to toggle visibility of Shard
+**Note:** Option (⌥) + Space is the shortcut to toggle visibility of Shard, and Option (⌥) + K is the shortcut for OCR capture
 
 ## Features
 

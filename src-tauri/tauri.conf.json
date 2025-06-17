@@ -41,8 +41,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "tessdata/eng.traineddata"
-    ]
+    "resources": ["tessdata/eng.traineddata"]
   }
 }

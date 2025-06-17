@@ -3295,16 +3295,16 @@ async fn perform_weather_lookup(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Create shortcut for Option+Space (Alt+Space)
+    // Create shortcut for Control+Space (Alt+Space)
     let alt_space_shortcut_definition =
-        tauri_gs::Shortcut::new(Some(tauri_gs::Modifiers::ALT), tauri_gs::Code::Space);
+        tauri_gs::Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::Space);
 
-    // Create shortcut for Option+K (Alt+K) for OCR
+    // Create shortcut for Control+K (Alt+K) for OCR
     let alt_k_shortcut_definition =
-        tauri_gs::Shortcut::new(Some(tauri_gs::Modifiers::ALT), tauri_gs::Code::KeyK);
+        tauri_gs::Shortcut::new(Some(tauri_gs::Modifiers::CONTROL), tauri_gs::Code::KeyK);
 
-    log::info!("[Plugin Shortcut] Registering Option+Space shortcut for toggle functionality");
-    log::info!("[Plugin Shortcut] Registering Option+K shortcut for OCR functionality");
+    log::info!("[Plugin Shortcut] Registering Control+Space shortcut for toggle functionality");
+    log::info!("[Plugin Shortcut] Registering Control+K shortcut for OCR functionality");
 
     tauri::Builder::default()
         .plugin(
@@ -3312,14 +3312,14 @@ pub fn run() {
                 .with_handler(move |app_handle: &AppHandle, shortcut_fired: &Shortcut, event: ShortcutEvent| {
                     if shortcut_fired == &alt_space_shortcut_definition {
                         if event.state() == ShortcutState::Pressed {
-                            log::info!("[Plugin Shortcut] Option+Space pressed. Emitting event to frontend.");
+                            log::info!("[Plugin Shortcut] Control+Space pressed. Emitting event to frontend.");
                             app_handle.emit("toggle-main-window", ()).unwrap_or_else(|e| {
                                 eprintln!("[Plugin Shortcut] Failed to emit toggle-main-window event: {}", e);
                             });
                         }
                     } else if shortcut_fired == &alt_k_shortcut_definition {
                         if event.state() == ShortcutState::Pressed {
-                            log::info!("[Plugin Shortcut] Option+K pressed. Triggering OCR capture.");
+                            log::info!("[Plugin Shortcut] Control+K pressed. Triggering OCR capture.");
                             app_handle.emit("trigger-ocr-capture", ()).unwrap_or_else(|e| {
                                 eprintln!("[Plugin Shortcut] Failed to emit trigger-ocr-capture event: {}", e);
                             });
@@ -3334,18 +3334,18 @@ pub fn run() {
             {
                 if let Err(e) = app.global_shortcut().register(alt_space_shortcut_definition.clone()) {
                     eprintln!("Failed to register global shortcut via plugin in setup: {}", e);
-                    log::error!("Failed to register Option+Space shortcut: {}", e);
+                    log::error!("Failed to register Control+Space shortcut: {}", e);
                 } else {
-                    log::info!("Successfully registered global shortcut via plugin in setup: Option+Space");
-                    println!("Option+Space shortcut registered successfully - try pressing Option+Space");
+                    log::info!("Successfully registered global shortcut via plugin in setup: Control+Space");
+                    println!("Control+Space shortcut registered successfully - try pressing Control+Space");
                 }
 
                 if let Err(e) = app.global_shortcut().register(alt_k_shortcut_definition.clone()) {
                     eprintln!("Failed to register OCR shortcut via plugin in setup: {}", e);
-                    log::error!("Failed to register Option+K shortcut: {}", e);
+                    log::error!("Failed to register Control+K shortcut: {}", e);
                 } else {
-                    log::info!("Successfully registered OCR shortcut via plugin in setup: Option+K");
-                    println!("Option+K shortcut registered successfully - try pressing Option+K for OCR");
+                    log::info!("Successfully registered OCR shortcut via plugin in setup: Control+K");
+                    println!("Control+K shortcut registered successfully - try pressing Control+K for OCR");
                 }
             }
 

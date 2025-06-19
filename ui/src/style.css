@@ -78,6 +78,11 @@
     --chevron-svg: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="%23FFFFFF"><path d="M8 11.207l-4.604-4.603.707-.707L8 9.793l3.9-3.9.707.707z"/></svg>');
     --source-container-bg-color: rgba(0, 0, 0, 0.2);
     --shadow-color: rgba(0, 0, 0, 0.2);
+    --radial-gradient-bg: radial-gradient(
+        circle at bottom left,
+        rgba(80, 80, 80, 0.8) 0%,
+        transparent 25%
+    );
     --icon-color: %23FFFFFF;
     --ocr-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
     --image-preview-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpolyline points='21 15 16 10 5 21'/%3E%3C/svg%3E");
@@ -95,8 +100,8 @@
         --button-bg-color: #d5d5da;
         --button-text-color: #333;
         --button-hover-bg-color: #e5e5ea;
-        --message-user-bg-color: #e5e5ea;
-        --message-assistant-bg-color: #d5d5da;
+        --message-user-bg-color: #f5f5fa;
+        --message-assistant-bg-color: #e5e5ea;
         --settings-panel-bg-color: rgba(240, 240, 240, 1);
         --settings-item-hover-bg-color: #e9e9e9;
         --settings-item-active-bg-color: #d9d9d9;
@@ -123,6 +128,11 @@
         --chevron-svg: url('data:image/svg+xml;utf8,<svg fill="black" height="24" viewBox="0 0 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
         --source-container-bg-color: rgba(0, 0, 0, 0.05);
         --shadow-color: rgba(0, 0, 0, 0.2);
+        --radial-gradient-bg: radial-gradient(
+            circle at bottom left,
+            rgba(255, 255, 255) 0%,
+            transparent 25%
+        );
         --icon-color: #000;
         --ocr-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
         --image-preview-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpolyline points='21 15 16 10 5 21'/%3E%3C/svg%3E");
@@ -156,11 +166,7 @@ body {
     padding: 15px;
     box-sizing: border-box;
     background-color: transparent; /* Keep container transparent */
-    background: radial-gradient(
-        circle at bottom left,
-        rgba(80, 80, 80, 0.8) 0%,
-        transparent 25%
-    ); /* Adjust color/opacity/stop % as needed */
+    background: var(--radial-gradient-bg);
     height: 100vh; /* Ensure container takes full viewport height */
 }
 

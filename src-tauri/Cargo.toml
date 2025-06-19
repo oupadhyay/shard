@@ -1,6 +1,6 @@
 [package]
 name = "Shard"
-version = "0.6.4"
+version = "0.7.0"
 description = "An AI Research Companion Built on Rust & Tauri"
 authors = ["oupadhyay"]
 license = "MIT"
@@ -38,7 +38,12 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 cocoa = "0.25"
 regex = "1.11.1"
 yahoo_finance_api = "2.2.1"
-time = { version = "0.3.36", features = ["macros", "serde", "formatting", "parsing"] }
+time = { version = "0.3.36", features = [
+    "macros",
+    "serde",
+    "formatting",
+    "parsing",
+] }
 ticker-sniffer = "0.1.0-alpha9"
 arxiv-tools = "1.1.2"
 urlencoding = "2.1.3"

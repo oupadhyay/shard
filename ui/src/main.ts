@@ -2322,37 +2322,7 @@ async function setupStreamListeners() {
 
 // --- Function to add CSS styles for tool status containers ---
 function addToolStatusStyles() {
-  const style = document.createElement("style");
-  style.textContent = `
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
-    .spinning-icon {
-      animation: spin 2s linear infinite;
-    }
-
-    .article-lookup-status-container,
-    .weather-lookup-status-container,
-    .financial-data-status-container {
-      background-color: transparent;
-      border-radius: 8px;
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      padding-left: 4px;
-      gap: 8px;
-      color: var(--text-color, #e0e0e0);
-    }
-
-    .article-lookup-status-text,
-    .weather-lookup-status-text,
-    .financial-data-status-text {
-      font-size: 0.9em;
-    }
-  `;
-  document.head.appendChild(style);
+  // All styles have been moved to style.css
 }
 
 window.addEventListener("DOMContentLoaded", async () => {

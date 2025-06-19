@@ -11,7 +11,6 @@
 
     color-scheme: dark;
     color: rgba(255, 255, 255, 0.87);
-    /* background: none; */ /* Removed */
 
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -23,25 +22,131 @@
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+    box-sizing: border-box;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.spinning-icon {
+    animation: spin 2s linear infinite;
+}
+
+/* Default dark theme variables */
+:root {
+    --background-color: transparent;
+    --text-color: #e0e0e0;
+    --text-color-rgb: 224, 224, 224;
+    --container-bg-color: #2a2a2a;
+    --input-area-bg-color: rgba(45, 45, 45, 0.8);
+    --input-bg-color: rgba(55, 55, 55, 0.9);
+    --input-border-color: rgba(255, 255, 255, 0.1);
+    --button-bg-color: rgba(75, 75, 75, 0.8);
+    --button-text-color: #ddd;
+    --button-hover-bg-color: rgba(100, 100, 100, 0.8);
+    --message-user-bg-color: rgba(60, 60, 60, 0.95);
+    --message-assistant-bg-color: rgba(50, 50, 50, 0.95);
+    --settings-panel-bg-color: rgba(50, 50, 50, 1);
+    --settings-item-hover-bg-color: rgba(60, 60, 60, 0.8);
+    --settings-item-active-bg-color: rgba(70, 70, 70, 0.8);
+    --link-color: #007aff;
+    --link-hover-color: #0056b3;
+    --scrollbar-thumb-color: rgba(255, 255, 255, 0.3);
+    --scrollbar-thumb-hover-color: rgba(255, 255, 255, 0.5);
+    --strong-color: rgba(255, 255, 255, 0.9);
+    --code-bg-color: rgba(0, 0, 0, 0.3);
+    --code-text-color: #e0e0e0;
+    --accordion-toggle-bg-color: transparent;
+    --accordion-toggle-hover-bg-color: rgba(255, 255, 255, 0.1);
+    --accordion-content-bg-color: rgba(0, 0, 0, 0.15);
+    --placeholder-color: rgba(255, 255, 255, 0.4);
+    --delete-btn-bg-color: rgba(30, 30, 30, 0.8);
+    --delete-btn-hover-bg-color: rgba(200, 0, 0, 0.9);
+    --delete-btn-color: rgba(255, 255, 255, 0.8);
+    --status-icon-color: #888;
+    --status-icon-visible-color: #007aff;
+    --toggle-bg-color: rgba(0, 0, 0, 0.2);
+    --toggle-checked-bg-color: #474747;
+    --toggle-knob-color: white;
+    --overlay-bg-color: rgba(0, 0, 0, 0.4);
+    --chevron-svg: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="%23FFFFFF"><path d="M8 11.207l-4.604-4.603.707-.707L8 9.793l3.9-3.9.707.707z"/></svg>');
+    --source-container-bg-color: rgba(0, 0, 0, 0.2);
+    --shadow-color: rgba(0, 0, 0, 0.2);
+    --icon-color: %23FFFFFF;
+    --ocr-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
+    --image-preview-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpolyline points='21 15 16 10 5 21'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --background-color: transparent;
+        --text-color: #333;
+        --text-color-rgb: 51, 51, 51;
+        --container-bg-color: #ffffff;
+        --input-area-bg-color: rgba(240, 240, 240, 0.8);
+        --input-bg-color: rgba(255, 255, 255, 0.5);
+        --input-border-color: rgba(255, 255, 255, 0.2);
+        --button-bg-color: #d5d5da;
+        --button-text-color: #333;
+        --button-hover-bg-color: #e5e5ea;
+        --message-user-bg-color: #e5e5ea;
+        --message-assistant-bg-color: #d5d5da;
+        --settings-panel-bg-color: rgba(240, 240, 240, 1);
+        --settings-item-hover-bg-color: #e9e9e9;
+        --settings-item-active-bg-color: #d9d9d9;
+        --link-color: #e5e5ea;
+        --link-hover-color: #d5d5fa;
+        --scrollbar-thumb-color: #ccc;
+        --scrollbar-thumb-hover-color: #aaa;
+        --strong-color: #111;
+        --code-bg-color: #f5f5f5;
+        --code-text-color: #333;
+        --accordion-toggle-bg-color: #f0f0f0;
+        --accordion-toggle-hover-bg-color: #e0e0e0;
+        --accordion-content-bg-color: #ffffff;
+        --placeholder-color: #999;
+        --delete-btn-bg-color: rgba(0, 0, 0, 0.1);
+        --delete-btn-hover-bg-color: rgba(0, 0, 0, 0.2);
+        --delete-btn-color: #333;
+        --status-icon-color: #888;
+        --status-icon-visible-color: #e5e5ea;
+        --toggle-bg-color: #ccc;
+        --toggle-checked-bg-color: #95959a;
+        --toggle-knob-color: #fff;
+        --overlay-bg-color: rgba(0, 0, 0, 0.4);
+        --chevron-svg: url('data:image/svg+xml;utf8,<svg fill="black" height="24" viewBox="0 0 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+        --source-container-bg-color: rgba(0, 0, 0, 0.05);
+        --shadow-color: rgba(0, 0, 0, 0.2);
+        --icon-color: #000;
+        --ocr-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
+        --image-preview-icon-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpolyline points='21 15 16 10 5 21'/%3E%3C/svg%3E");
+    }
 }
 
 html,
 body {
-    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-    line-height: 1.4; /* Slightly tighter line height */
-    font-weight: 400;
-    font-size: 14px; /* Smaller base font size */
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    background-color: var(--background-color);
+    color: var(--text-color);
     margin: 0;
     padding: 0;
-    /* background-color: transparent; */ /* Removed */
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+    font-weight: 400;
     color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    height: 100%; /* Use min-height */
-    overflow: hidden; /* Prevent scrollbars on body */
 }
 
 /* Container */
@@ -51,9 +156,6 @@ body {
     padding: 15px;
     box-sizing: border-box;
     background-color: transparent; /* Keep container transparent */
-    /* Remove max-width to allow full width */
-    /* max-width: 800px; */
-    margin: 0 auto;
     background: radial-gradient(
         circle at bottom left,
         rgba(80, 80, 80, 0.8) 0%,
@@ -69,7 +171,7 @@ body {
     display: flex; /* Use flexbox for alignment */
     align-items: center;
     gap: 10px; /* Spacing between elements */
-    background-color: rgba(40, 40, 40, 0); /* More transparent */
+    background-color: transparent;
     padding: 10px;
     border-radius: 12px; /* Increased */
 }
@@ -79,33 +181,32 @@ body {
 }
 
 .settings input[type="password"] {
-    flex-grow: 1; /* Allow input to take available space */
-    padding: 8px 12px;
-    background-color: rgba(60, 60, 60, 0); /* More transparent */
-    border: 1px solid rgba(80, 80, 80, 0.2);
+    padding: 6px 10px;
+    background-color: var(--input-bg-color);
+    border: 1px solid var(--input-border-color);
     border-radius: 8px; /* Increased */
-    color: inherit;
+    color: var(--text-color);
     font-size: 0.9em;
     min-width: 10px;
 }
 
 .settings button {
     padding: 8px 15px;
-    background-color: rgba(80, 80, 80, 0.2); /* More transparent */
+    background-color: var(--button-bg-color);
     border: none;
     border-radius: 8px; /* Increased */
-    color: inherit;
+    color: var(--button-text-color);
     cursor: pointer;
     transition: background-color 0.2s;
 }
 
 .settings button:hover {
-    background-color: rgba(100, 100, 100, 0.2);
+    background-color: var(--button-hover-bg-color);
 }
 
 .settings #settings-status {
     font-size: 0.8em;
-    color: #888;
+    color: var(--status-icon-color);
     margin-left: auto; /* Push status to the right */
 }
 
@@ -160,9 +261,9 @@ body {
     border-radius: 15px; /* Keep consistent rounding */
     width: 100%; /* Make messages take full width */
     max-width: 100%; /* Ensure it uses the full width */
-    background-color: rgba(50, 50, 50, 0.7); /* Slightly more transparent background */
+    background-color: var(--message-assistant-bg-color);
     word-wrap: break-word; /* Wrap long words */
-    color: rgba(255, 255, 255, 0.95); /* Slightly brighter text */
+    color: var(--text-color);
     font-size: 0.9em; /* Reduce message font size */
     opacity: 1; /* Apply opacity */
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); /* Add shadow for depth */
@@ -171,19 +272,19 @@ body {
 }
 
 .message.user {
-    background-color: rgba(60, 60, 60, 0.95);
+    background-color: var(--message-user-bg-color);
 }
 
 .message.assistant {
-    background-color: rgba(75, 75, 75, 0.95);
+    background-color: var(--message-assistant-bg-color);
 }
 
 .message > strong {
     display: block;
-    margin-bottom: 4px;
-    font-weight: 600;
+    margin-bottom: 8px;
+    font-weight: 600; /* Slightly stronger weight */
     font-size: 0.9em; /* Adjusted size */
-    color: rgba(255, 255, 255, 0.7); /* Brighter label */
+    color: var(--strong-color);
 }
 
 /* ADDED: Styling for the main message content area */
@@ -210,12 +311,12 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
-    background-color: rgba(45, 45, 45, 0.4);
+    background-color: var(--input-area-bg-color);
     border-radius: 25px; /* User removed this based on their diff */
     margin-top: 15px; /* REMOVED: Not suitable for fixed positioning context */
     backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--input-border-color);
+    box-shadow: 0 4px 15px var(--shadow-color);
 
     position: fixed;
     bottom: 15px;
@@ -230,7 +331,7 @@ body {
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
-    background-color: rgba(60, 60, 60, 0.95); /* Move bg color here */
+    background-color: var(--input-bg-color); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
 }
 
@@ -259,13 +360,13 @@ body {
     bottom: 150px; /* Match container padding */
     left: 15px;
     right: 15px;
-    background-color: rgba(40, 40, 40, 0.9); /* Darker, slightly more opaque */
+    background-color: var(--settings-panel-bg-color);
     padding: 20px;
     border-radius: 15px;
     box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4); /* Added softer shadow */
     z-index: 100; /* Ensure it's above chat history */
     display: none; /* Initially hidden */
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--text-color);
     font-size: 13px; /* Smaller font size for settings */
     padding-top: 10px; /* Add some padding at the top when reversed */
     opacity: 0; /* Start fully transparent for fade-in */
@@ -280,14 +381,14 @@ body {
 /* Close Button Styles */
 #settings-close {
     position: absolute;
-    top: 10px;
-    right: 20px;
+    top: 15px;
+    right: 15px;
     width: 24px;
     height: 24px;
     border-radius: 12px;
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: var(--delete-btn-bg-color);
     border: none;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--text-color);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -299,8 +400,8 @@ body {
 }
 
 #settings-close:hover {
-    background-color: rgba(255, 255, 255, 0.2);
-    color: white;
+    background-color: var(--delete-btn-hover-bg-color);
+    color: var(--text-color);
 }
 
 #settings-close:active {
@@ -309,7 +410,7 @@ body {
 
 #settings-content h2 {
     margin-top: 0;
-    color: white;
+    color: var(--strong-color);
     font-weight: 500;
     padding-bottom: 5px;
     font-size: 1.2em; /* Adjust header size relative to panel font-size */
@@ -319,7 +420,7 @@ body {
     display: block;
     margin: 5px 0 0 0;
     font-size: 0.9em; /* Adjust label size relative to panel font-size */
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
 }
 
 #settings-panel label[for="gemini-api-key-input"] {
@@ -338,9 +439,9 @@ body {
     width: 100%;
     padding: 5px 10px;
     border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background-color: rgba(0, 0, 0, 0.3);
-    color: white;
+    border: 1px solid var(--input-border-color);
+    background-color: var(--input-bg-color);
+    color: var(--text-color);
     font-size: 1em;
     outline: none;
     transition:
@@ -350,13 +451,14 @@ body {
 
 #settings-panel input[type="password"]#api-key-input:focus,
 #settings-panel input[type="password"]#gemini-api-key-input:focus {
-    border-color: #007aff;
-    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+    outline: none;
+    border-color: var(--link-color);
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
 }
 
 #settings-status {
     font-size: 0.9em; /* Adjust status size relative to panel font-size */
-    color: #cccccc;
+    color: var(--status-icon-color);
     min-height: 1.5em; /* Reserve space */
     margin-top: 5px; /* Add some space below the input group */
 }
@@ -371,7 +473,7 @@ body {
     display: block;
     margin-bottom: 8px; /* Increased margin */
     font-size: 1em;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
 }
 
 #settings-panel #model-select {
@@ -384,11 +486,11 @@ body {
     font-size: 1em;
     font-weight: 400;
     line-height: 1.7;
-    color: white;
-    background-color: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-color);
+    background-color: var(--input-bg-color);
+    border: 1px solid var(--input-border-color);
     border-radius: 8px;
-    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="%23FFFFFF"><path d="M8 11.207l-4.604-4.603.707-.707L8 9.793l3.9-3.9.707.707z"/></svg>');
+    background-image: var(--chevron-svg);
     background-repeat: no-repeat;
     background-position: right 10px center;
     background-size: 16px 16px;
@@ -397,7 +499,7 @@ body {
 }
 
 #settings-panel #model-select:focus {
-    border-color: #007aff; /* Highlight on focus */
+    border-color: var(--link-color); /* Highlight on focus */
     box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25); /* Optional focus shadow */
 }
 
@@ -410,8 +512,8 @@ body {
 #settings-panel .setting-item.web-search-setting {
     display: flex;
     align-items: center;
-    background-color: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background-color: var(--input-bg-color);
+    border: 1px solid var(--input-border-color);
     border-radius: 8px;
     padding: 5px 10px; /* Keep consistent padding */
     margin-top: 10px;
@@ -425,7 +527,7 @@ body {
 }
 
 #settings-panel .web-search-setting label[for="web-search-toggle"] {
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
     font-size: 1em;
     flex-grow: 1; /* Allow label to take available space on the left */
 }
@@ -436,8 +538,8 @@ body {
     -moz-appearance: none;
     width: 18px; /* Custom size */
     height: 18px;
-    background-color: rgba(0, 0, 0, 0.2); /* Darker background for the box */
-    border: 1px solid rgba(255, 255, 255, 0.3); /* Slightly more visible border */
+    background-color: var(--toggle-bg-color);
+    border: 1px solid var(--input-border-color);
     border-radius: 4px;
     cursor: pointer;
     position: relative;
@@ -447,7 +549,7 @@ body {
 }
 
 #settings-panel input[type="checkbox"]#web-search-toggle:checked {
-    background-color: #474747; /* Accent color when checked */
+    background-color: var(--toggle-checked-bg-color);
 }
 
 /* Custom checkmark */
@@ -458,7 +560,7 @@ body {
     left: 50%;
     transform: translate(-50%, -50%);
     font-size: 14px;
-    color: white;
+    color: var(--toggle-knob-color);
     line-height: 1;
 }
 
@@ -514,9 +616,9 @@ body {
 /* General Tool Button Style */
 #tool-buttons button,
 #ocr-icon-container {
-    background: rgba(65, 65, 65, 0.95);
+    background: var(--button-bg-color);
     border: none;
-    color: var(--text-color);
+    color: var(--button-text-color);
     cursor: pointer;
     padding: 5px;
     border-radius: 10px;
@@ -528,7 +630,7 @@ body {
 
 #tool-buttons button:hover,
 #ocr-icon-container:hover {
-    background-color: rgba(100, 100, 100, 0.8);
+    background-color: var(--button-hover-bg-color);
 }
 
 #tool-buttons button svg,
@@ -554,8 +656,9 @@ body {
 
 /* Style the new settings toggle button */
 #settings-toggle {
-    background-color: rgba(50, 50, 50, 0.89);
-    border: 1px solid rgba(80, 80, 80, 0.89);
+    background-color: var(--button-bg-color);
+    border: 1px solid var(--input-border-color);
+    color: var(--button-text-color);
     font-size: 16px;
     border-radius: 50%;
     cursor: pointer;
@@ -569,8 +672,8 @@ body {
 }
 
 #settings-toggle:hover {
-    background-color: rgba(65, 65, 65, 0.9);
-    border-color: rgba(100, 100, 100, 0.9);
+    background-color: var(--button-hover-bg-color);
+    border-color: var(--input-border-color);
 }
 
 /* Thinking Indicator Animation */
@@ -584,7 +687,7 @@ body {
 .message.thinking .dot {
     width: 6px;
     height: 6px;
-    background-color: rgba(255, 255, 255, 0.6);
+    background-color: var(--text-color);
     border-radius: 50%;
     margin: 0 2px;
     animation: pulse 1.4s infinite ease-in-out both;
@@ -622,7 +725,7 @@ body {
     display: inline-block; /* Essential for individual dot animation and sizing */
     width: 5px;
     height: 5px;
-    background-color: rgba(255, 255, 255, 0.7);
+    background-color: var(--text-color);
     border-radius: 50%;
     margin: 0 1.5px; /* Adjust spacing between dots */
     animation: pulse 1.4s infinite ease-in-out both;
@@ -643,14 +746,14 @@ body {
 /* Reasoning Accordion Styles */
 .reasoning-accordion {
     margin-top: 10px; /* Space between main content and reasoning */
-    border-top: 1px solid rgba(255, 255, 255, 0.1); /* Subtle separator */
+    border-top: 1px solid var(--input-border-color); /* Subtle separator */
     padding-top: 8px;
 }
 
 .reasoning-accordion-toggle {
     cursor: pointer;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--text-color);
     position: relative;
     padding-left: 18px; /* Space for custom marker */
     outline: none; /* Remove focus outline */
@@ -663,7 +766,7 @@ body {
 }
 
 .reasoning-accordion-toggle:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--strong-color);
 }
 
 /* Custom triangle marker */
@@ -684,10 +787,10 @@ body {
 .reasoning-content {
     margin-top: 8px;
     padding: 0 10px;
-    background-color: rgba(0, 0, 0, 0.15); /* Slightly different background */
+    background-color: var(--accordion-content-bg-color);
     border-radius: 8px;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--text-color);
     overflow: hidden;
     max-height: 0;
     opacity: 0;
@@ -717,7 +820,7 @@ body {
     font-size: 1em;
     margin: 4px 0 2px 0; /* More space above, less below */
     font-weight: 600; /* Semi-bold */
-    color: rgba(255, 255, 255, 0.9); /* Slightly brighter than reasoning text */
+    color: var(--strong-color);
 }
 
 /* OCR Accordion Styles */
@@ -728,7 +831,7 @@ body {
 .ocr-accordion-toggle {
     cursor: pointer;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--text-color);
     position: relative;
     padding-left: 24px; /* Space for image icon */
     outline: none; /* Remove focus outline */
@@ -744,7 +847,7 @@ body {
 }
 
 .ocr-accordion-toggle:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--strong-color);
 }
 
 /* Image icon for OCR accordion */
@@ -756,7 +859,7 @@ body {
     transform: translateY(-50%);
     width: 16px;
     height: 16px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
+    background-image: var(--ocr-icon-svg);
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
@@ -765,10 +868,10 @@ body {
 .ocr-content {
     margin-top: 8px;
     padding: 0 10px;
-    background-color: rgba(0, 0, 0, 0.15); /* Slightly different background */
+    background-color: var(--accordion-content-bg-color);
     border-radius: 8px;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--text-color);
     overflow: hidden;
     max-height: 0;
     opacity: 0;
@@ -813,11 +916,11 @@ body {
     align-items: center; /* Align items vertically */
     gap: 10px;
     padding: 4px; /* Slightly reduce padding */
-    background-color: rgba(45, 45, 45, 1);
+    background-color: var(--input-bg-color);
     border-radius: 25px;
     margin-top: auto;
     backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--input-border-color);
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
@@ -825,7 +928,7 @@ body {
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
-    background-color: rgba(60, 60, 60, 0.9); /* Move bg color here */
+    background-color: var(--input-bg-color); /* Move bg color here */
     border-radius: 20px; /* Rounded wrapper */
     padding: 5px 5px 5px 8px; /* Adjust padding T/R/B/L */
     max-width: 100%;
@@ -837,7 +940,7 @@ body {
     border-radius: 4px;
     margin-right: 8px; /* Space between image and input */
     object-fit: cover; /* Scale image nicely */
-    background-color: rgba(0, 0, 0, 0.2); /* Placeholder bg */
+    background-color: var(--accordion-content-bg-color); /* Placeholder bg */
     margin-top: 2px; /* Align better with first line of text */
 }
 
@@ -850,7 +953,7 @@ body {
     padding: 5px 5px 5px 5px;
     background-color: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--text-color);
     font-size: 1em;
     outline: none;
     resize: none;
@@ -871,7 +974,7 @@ body {
     position: absolute;
     left: 16px; /* Should match #message-input padding-left */
     top: 14px; /* Should match #message-input padding-top */
-    color: rgba(255, 255, 255, 0.4); /* Placeholder text color */
+    color: var(--placeholder-color); /* Placeholder text color */
     pointer-events: none; /* Allows clicks to pass through to the input */
 }
 
@@ -890,7 +993,7 @@ body {
     max-height: 80px;
     border-radius: 4px;
     display: block;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--input-border-color);
 }
 
 .delete-inline-image-btn {
@@ -900,9 +1003,9 @@ body {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background-color: rgba(30, 30, 30, 0.8);
-    color: rgba(255, 255, 255, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    background-color: var(--delete-btn-bg-color);
+    color: var(--delete-btn-color);
+    border: 1px solid var(--input-border-color);
     font-size: 12px;
     font-weight: bold;
     line-height: 16px;
@@ -917,8 +1020,8 @@ body {
 
 .delete-inline-image-btn:hover {
     opacity: 1;
-    background-color: rgba(200, 0, 0, 0.9);
-    color: white;
+    background-color: var(--delete-btn-hover-bg-color);
+    color: var(--delete-btn-color);
     transform: scale(1.1);
 }
 
@@ -965,14 +1068,14 @@ body.fade-out {
     display: flex;
     align-items: center;
     gap: 0px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--input-border-color);
 }
 
 /* Styling for the status icon (checkmark) */
 .status-icon-text {
     padding-right: 5px;
     font-size: 0.8em;
-    color: #c7c7c7;
+    color: var(--status-icon-color);
 }
 
 #api-key-status-icon {
@@ -986,7 +1089,7 @@ body.fade-out {
     align-items: center;
     justify-content: center;
     font-size: 1em;
-    color: #c7c7c7;
+    color: var(--status-icon-color);
     background-color: transparent;
     opacity: 0;
     transition: opacity 0.2s ease-in-out;
@@ -1003,7 +1106,7 @@ body.fade-out {
     gap: 8px;
     padding: 5px 0;
     font-style: italic;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
 }
 
 .web-search-globe-icon,
@@ -1041,7 +1144,7 @@ body.fade-out {
     gap: 8px;
     padding: 5px 0;
     font-style: italic;
-    color: var(--text-secondary-color);
+    color: var(--text-color);
     background-color: transparent;
     border-radius: 8px;
 }
@@ -1057,8 +1160,8 @@ body.fade-out {
     padding: 4px 0;
     margin-bottom: 8px;
     font-size: 0.85em;
-    color: var(--text-secondary-color);
-    border-bottom: 1px solid var(--border-color);
+    color: var(--text-color);
+    border-bottom: 1px solid var(--input-border-color);
 }
 
 /* ADDED: Styles for the persistent Web Search Source container */
@@ -1069,14 +1172,15 @@ body.fade-out {
     padding: 4px 0;
     margin-bottom: 8px;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
+    border-bottom: 1px solid var(--input-border-color);
 }
 
 .web-search-accordion {
     margin: 0 0 8px 0;
-    border: 1px solid rgba(0, 0, 0, 0);
+    border: 1px solid transparent;
     border-radius: 6px;
-    background-color: rgba(0, 0, 0, 0);
+    background-color: transparent;
 }
 
 .web-search-accordion-toggle {
@@ -1086,8 +1190,8 @@ body.fade-out {
     align-items: center;
     gap: 8px;
     font-size: 0.9em;
-    color: rgba(255, 255, 255, 0.7);
-    background-color: rgba(0, 0, 0, 0);
+    color: var(--text-color);
+    background-color: transparent;
     border: none;
     font-family: inherit;
     width: 100%;
@@ -1095,15 +1199,15 @@ body.fade-out {
 }
 
 .web-search-accordion-toggle:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--strong-color);
 }
 
 .web-search-content {
     padding: 0 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--input-border-color);
     font-size: 0.9em;
-    color: rgba(255, 255, 255, 0.7);
-    background-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-color);
+    background-color: var(--source-container-bg-color);
     border-radius: 8px;
     max-height: 0;
     opacity: 0;
@@ -1145,12 +1249,13 @@ body.fade-out {
 }
 
 .web-search-source-info a {
-    color: #007aff;
+    color: var(--link-color);
     text-decoration: none;
 }
 
 .web-search-source-info a:hover {
     text-decoration: underline;
+    color: var(--link-hover-color);
 }
 
 .web-search-answer {
@@ -1192,8 +1297,8 @@ body.fade-out {
 
 .arxiv-paper-summary {
     margin-bottom: 15px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--input-border-color);
 }
 
 .arxiv-paper-summary:last-child {
@@ -1205,19 +1310,19 @@ body.fade-out {
 .arxiv-paper-summary h4 {
     font-size: 1em;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
-    margin-bottom: 4px;
+    margin-bottom: 5px;
+    color: var(--strong-color);
 }
 
 .arxiv-paper-summary p {
     font-size: 0.9em;
-    color: rgba(255, 255, 255, 0.75);
-    margin-bottom: 6px;
     line-height: 1.5;
+    color: rgba(var(--text-color-rgb), 0.8);
+    margin-bottom: 5px;
 }
 
 .arxiv-paper-summary p strong {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--strong-color);
 }
 
 .arxiv-summary-text {
@@ -1225,14 +1330,15 @@ body.fade-out {
 
 .arxiv-pdf-link {
     display: inline-block;
-    margin-top: 4px;
+    margin-top: 5px;
     font-size: 0.9em;
-    color: #007aff;
+    color: var(--link-color);
     text-decoration: none;
 }
 
 .arxiv-pdf-link:hover {
     text-decoration: underline;
+    color: var(--link-hover-color);
 }
 
 /* Add custom triangle marker for web search accordion */
@@ -1244,6 +1350,11 @@ body.fade-out {
     padding-left: 4px;
 }
 
+.web-search-accordion-toggle[aria-expanded="true"]::before {
+    transform: rotate(90deg);
+}
+
+.article-lookup-status-container,
 .weather-lookup-status-container,
 .financial-data-status-container,
 .arxiv-lookup-status-container {
@@ -1254,7 +1365,7 @@ body.fade-out {
     align-items: center;
     padding-left: 4px;
     gap: 8px;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-color);
 }
 
 .article-lookup-status-text,
@@ -1274,7 +1385,7 @@ body.fade-out {
 .image-preview-accordion-toggle {
     cursor: pointer;
     font-size: 0.85em;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--text-color);
     position: relative;
     padding-left: 24px;
     outline: none;
@@ -1289,7 +1400,7 @@ body.fade-out {
 }
 
 .image-preview-accordion-toggle:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--strong-color);
 }
 
 /* Image icon for Image Preview accordion */
@@ -1301,7 +1412,7 @@ body.fade-out {
     transform: translateY(-50%);
     width: 16px;
     height: 16px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpolyline points='21 15 16 10 5 21'/%3E%3C/svg%3E");
+    background-image: var(--image-preview-icon-svg);
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
@@ -1310,7 +1421,7 @@ body.fade-out {
 .image-preview-content {
     margin-top: 8px;
     padding: 8px 10px;
-    background-color: rgba(0, 0, 0, 0.15);
+    background-color: var(--accordion-content-bg-color);
     border-radius: 8px;
     overflow: hidden;
     max-height: 0;

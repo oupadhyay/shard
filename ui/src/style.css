@@ -51,9 +51,6 @@ body {
     padding: 15px;
     box-sizing: border-box;
     background-color: transparent; /* Keep container transparent */
-    /* Add backdrop blur */
-    backdrop-filter: blur(12px); /* Adjust blur radius as needed */
-    -webkit-backdrop-filter: blur(12px); /* For Safari */
     /* Remove max-width to allow full width */
     /* max-width: 800px; */
     margin: 0 auto;

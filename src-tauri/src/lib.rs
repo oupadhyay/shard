@@ -8,6 +8,7 @@ use quick_xml::de::from_str;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json;
+
 use std::env; // For temp_dir
 use std::fs;
 use std::io::Cursor;
@@ -25,6 +26,9 @@ use time::OffsetDateTime;
 use urlencoding; // Added urlencoding crate for URL encoding
 use uuid::Uuid; // For unique filenames // Added for base64 encoding // Plugin imports
 use yahoo_finance_api as yfa; // Using an alias for brevity // For timestamp conversion
+
+// MCP (Model Context Protocol) simplified module
+pub mod mcp_simple;
 
 // Per-stream cancellation system
 static CURRENT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
@@ -105,7 +109,18 @@ struct ArxivSearchParameters {
 const DEFAULT_MODEL: &str = "gemini-2.5-flash-preview-05-20#thinking-enabled";
 
 // --- System Instruction ---
-const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.";
+const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.
+
+IMPORTANT: You have access to research tools that can help answer questions requiring current information or specialized knowledge:
+- Wikipedia Research: For factual information and background context
+- Weather Lookup: For current weather conditions
+- Financial Data: For stock market and financial information
+- ArXiv Research: For academic papers and scientific research
+
+When you need external information to properly answer a question, you can request tool usage by responding with a JSON object in this format:
+{\"tools\": [{\"tool_type\": \"WIKIPEDIA_LOOKUP\", \"query\": \"search term\", \"reasoning\": \"why needed\", \"priority\": 1}], \"reasoning\": \"explanation\"}
+
+Available tool types: WIKIPEDIA_LOOKUP, WEATHER_LOOKUP, FINANCIAL_DATA, ARXIV_LOOKUP";
 
 // --- Config Structures ---
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -337,6 +352,42 @@ enum AnalysisLLMDecision {
     NextTerm { term: String, reason: String },
     #[serde(rename = "STOP")]
     Stop { reason: String },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+enum ToolType {
+    #[serde(rename = "WIKIPEDIA_LOOKUP")]
+    WikipediaLookup,
+    #[serde(rename = "WEATHER_LOOKUP")]
+    WeatherLookup,
+    #[serde(rename = "FINANCIAL_DATA")]
+    FinancialData,
+    #[serde(rename = "ARXIV_LOOKUP")]
+    ArxivLookup,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ToolDecision {
+    tool_type: ToolType,
+    query: String,
+    reasoning: String,
+    priority: u8, // 1-5, where 1 is highest priority
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MultiToolDecisionResponse {
+    tools: Vec<ToolDecision>,
+    reasoning: String,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct ToolExecutionResult {
+    tool_type: ToolType,
+    query: String,
+    success: bool,
+    content: Option<String>,
+    error: Option<String>,
 }
 
 // --- ADDED: Weather Lookup Event Payloads ---
@@ -707,55 +758,6 @@ fn ocr_image_buffer(_app_handle: &AppHandle, img_buffer: &DynamicImage) -> Resul
     );
 
     Ok(text)
-}
-
-// --- ADDED: Helper function to extract stock symbol ---
-fn extract_stock_symbol(query: &str) -> Option<String> {
-    log::info!(
-        "Attempting to extract stock symbol from query: '{}' using ticker-sniffer.",
-        query
-    );
-
-    // According to ticker-sniffer docs, `is_case_sensitive_doc_parsing = false`
-    // might be better for search query inputs, though it can increase false positives
-    // between nouns (e.g., "apple") and company names (e.g., "Apple").
-    match ticker_sniffer::extract_tickers_from_text(query, true) {
-        Ok(ticker_map) => {
-            if ticker_map.is_empty() {
-                log::warn!("ticker-sniffer found no symbols in query: '{}'", query);
-                None
-            } else {
-                // Find the ticker with the highest frequency.
-                // If there are multiple with the same highest frequency, pick the first one alphabetically.
-                let mut best_symbol: Option<String> = None;
-
-                // Sort by frequency (desc) then by symbol (asc) for tie-breaking
-                let mut sorted_tickers: Vec<(&String, &usize)> = ticker_map.iter().collect();
-                sorted_tickers.sort_by(|a, b| {
-                    b.1.cmp(a.1) // Sort by frequency descending
-                        .then_with(|| a.0.cmp(b.0)) // Then by symbol ascending
-                });
-
-                if let Some((symbol, freq)) = sorted_tickers.first() {
-                    log::info!(
-                        "ticker-sniffer extracted symbol: '{}' with frequency {} from query: '{}' (Full map: {:?})",
-                        symbol, freq, query, ticker_map
-                    );
-                    best_symbol = Some(symbol.to_string());
-                }
-
-                best_symbol
-            }
-        }
-        Err(e) => {
-            log::error!(
-                "ticker-sniffer failed to extract symbols from query '{}': {}",
-                query,
-                e
-            );
-            None
-        }
-    }
 }
 
 // --- ADDED: Geocoding Function ---
@@ -1183,13 +1185,7 @@ async fn send_text_to_model(
     let stream_id = CURRENT_STREAM_ID.fetch_add(1, Ordering::Relaxed) + 1;
     // Create a new message list, starting with the system instruction.
     let mut final_messages = Vec::new();
-    final_messages.push(ChatMessage {
-        role: "system".to_string(), // This role will be adapted by call_gemini_api
-        content: SYSTEM_INSTRUCTION.to_string(),
-        image_base64_data: None,
-        image_mime_type: None,
-        image_file_api_uri: None,
-    });
+    // Note: System instruction will be added later, potentially with MCP guidance if tools are used
     // Original user messages will be added after potential web search or financial data context
 
     let config = load_config(&app_handle)?;
@@ -1204,534 +1200,835 @@ async fn send_text_to_model(
 
     log::info!("Processing request for model: {}", model_name);
 
-    // --- Web Search Logic --- (Now Article Lookup)
-    let mut article_lookup_performed_successfully = false;
-    let mut article_lookup_result_text: Option<String> = None;
-    // --- Financial Data Logic ---
-    let mut financial_data_fetched_successfully = false;
-    let mut financial_data_result_text: Option<String> = None;
-    // --- ADDED: Weather Lookup Logic State ---
-    let mut weather_lookup_performed_successfully = false;
-    let mut weather_lookup_result_text: Option<String> = None;
-    // --- ADDED: ArXiv Lookup Logic State ---
-    let mut arxiv_lookup_performed_successfully = false;
-    let mut arxiv_lookup_result_text: Option<String> = None;
+    // Tool execution state
+    let mut tool_context_available = false;
+    let mut comprehensive_tool_context: Option<String> = None;
 
     // Create reqwest client once
     let client = reqwest::Client::new();
 
     if config.enable_web_search.unwrap_or(true) {
-        if let Some(last_user_message) = messages.last() {
-            if last_user_message.role == "user" {
-                let user_query = last_user_message.content.trim();
-                let query_words: Vec<&str> = user_query.split_whitespace().collect();
+        // Find the actual last user message, not just the last message
+        if let Some(last_user_message) = messages.iter().rev().find(|msg| msg.role == "user") {
+            let user_query = last_user_message.content.trim();
+            let query_words: Vec<&str> = user_query.split_whitespace().collect();
 
-                if query_words.len() >= 1 {
-                    log::info!(
-                        "Considering external data lookup for query: '{}'",
+            if query_words.len() >= 1 {
+                log::info!(
+                    "Considering external data lookup for query: '{}'",
+                    user_query
+                );
+
+                let decider_prompt = format!(
+                        "You are an expert MCP (Model Context Protocol) tool reasoning assistant. Your job is to analyze user queries and determine ALL research tools needed to provide a comprehensive answer.\n\n\
+                        AVAILABLE TOOLS:\n\
+                        1. WIKIPEDIA_LOOKUP: Iterative Wikipedia research for factual information, background context, and general knowledge\n\
+                        2. WEATHER_LOOKUP: Current weather conditions for specific locations (use city names or zip codes)\n\
+                        3. FINANCIAL_DATA: Real-time financial market data and stock information (use stock ticker symbols like AAPL, GOOGL, TSLA)\n\
+                        4. ARXIV_LOOKUP: Academic papers and research from arXiv repository\n\n\
+                        MULTI-TOOL STRATEGY GUIDELINES (REQUIRED FOR COMPLEX QUERIES):\n\
+                        - Business/investment queries: Wikipedia (context) + Financial data (current metrics)\n\
+                        - Technology + market queries: Wikipedia (background) + ArXiv (research) + Financial (companies)\n\
+                        - Company performance queries: Financial data (metrics) + Wikipedia (business context)\n\
+                        - Travel queries: Weather (conditions) + Wikipedia (location info)\n\
+                        - Research queries: Wikipedia (overview) + ArXiv (latest papers)\n\
+                        - Priority 1 = most important, 5 = least important\n\n\
+                        WIKIPEDIA QUERY GUIDELINES:\n\
+                        - Use GENERIC, foundational terms (e.g., \"quantum computing\", \"artificial intelligence\", \"renewable energy\")\n\
+                        - AVOID specific subtopics like \"quantum computing companies\", \"AI stocks\", \"solar panel manufacturers\"\n\
+                        - Let the iterative system extract specific details from broad, authoritative articles\n\
+                        - Good: \"quantum computing\" → Bad: \"quantum computing companies\"\n\
+                        - Good: \"Tokyo\" → Bad: \"Tokyo restaurants\"\n\n\
+                        EXAMPLES:\n\
+                        Query: \"What are the eminent quantum computing companies right now and what are their stock prices?\"\n\
+                        Response: {{\n\
+                        \"tools\": [\n\
+                            {{\"tool_type\": \"WIKIPEDIA_LOOKUP\", \"query\": \"quantum computing\", \"reasoning\": \"Get foundational knowledge about quantum computing field and key players\", \"priority\": 1}}\n\
+                        ],\n\
+                        \"reasoning\": \"Start with broad quantum computing overview, then extract companies for stock lookup in follow-up\"\n\
+                        }}\n\n\
+                        Query: \"What's the weather like in Tokyo and tell me about the city?\"\n\
+                        Response: {{\n\
+                        \"tools\": [\n\
+                            {{\"tool_type\": \"WEATHER_LOOKUP\", \"query\": \"Tokyo\", \"reasoning\": \"Get current weather conditions for travel planning\", \"priority\": 1}},\n\
+                            {{\"tool_type\": \"WIKIPEDIA_LOOKUP\", \"query\": \"Tokyo\", \"reasoning\": \"City information, culture, and travel context\", \"priority\": 2}}\n\
+                        ],\n\
+                        \"reasoning\": \"Travel-related query needing both current conditions and background information\"\n\
+                        }}\n\n\
+                        Query: \"Tell me a joke\"\n\
+                        Response: {{\n\
+                        \"tools\": [],\n\
+                        \"reasoning\": \"Creative request that doesn't require external data lookup\"\n\
+                        }}\n\n\
+                        User Query: '{}'\n\n\
+                        Analyze the query and respond with a JSON object containing:\n\
+                        - \"tools\": Array of tool decisions (empty if no tools needed)\n\
+                        - \"reasoning\": Brief explanation of your tool selection strategy\n\n\
+                        Each tool decision should have:\n\
+                        - \"tool_type\": One of WIKIPEDIA_LOOKUP, WEATHER_LOOKUP, FINANCIAL_DATA, ARXIV_LOOKUP\n\
+                        - \"query\": Specific search query for that tool\n\
+                        - \"reasoning\": Why this tool is needed\n\
+                        - \"priority\": Number 1-5 (1 = highest priority)\n\n\
+                        Respond only with valid JSON:",
                         user_query
+                );
+
+                let decider_messages = vec![ChatMessage {
+                    role: "user".to_string(),
+                    content: decider_prompt,
+                    image_base64_data: None,
+                    image_mime_type: None,
+                    image_file_api_uri: None,
+                }];
+                let decider_model_name = "gemini-2.0-flash".to_string();
+
+                let decider_gemini_api_key_string = match config.gemini_api_key.clone() {
+                    Some(key) if !key.is_empty() => key,
+                    _ => {
+                        log::warn!("Gemini API key not set for decider. Defaulting to NO_LOOKUP.");
+                        String::new()
+                    }
+                };
+
+                let tool_decisions: Vec<ToolDecision>; // Initialize tool decisions
+                if !decider_gemini_api_key_string.is_empty() {
+                    match call_gemini_api_non_streaming(
+                        &client,
+                        decider_messages,
+                        &decider_gemini_api_key_string,
+                        decider_model_name.clone(),
+                    )
+                    .await
+                    {
+                        Ok(decider_response_text) => {
+                            log::info!(
+                                "Multi-tool decider response for query '{}': '{}'",
+                                user_query,
+                                decider_response_text
+                            );
+
+                            // Clean the response to extract JSON
+                            let cleaned_response = decider_response_text
+                                .trim()
+                                .trim_start_matches("```json")
+                                .trim_start_matches("```")
+                                .trim_end_matches("```")
+                                .trim();
+
+                            match serde_json::from_str::<MultiToolDecisionResponse>(
+                                cleaned_response,
+                            ) {
+                                Ok(decision_response) => {
+                                    log::info!(
+                                        "Parsed tool decisions for query '{}': {} tools, reasoning: '{}'",
+                                        user_query,
+                                        decision_response.tools.len(),
+                                        decision_response.reasoning
+                                    );
+                                    tool_decisions = decision_response.tools;
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to parse multi-tool decision response for query '{}': {}. Raw response: '{}'. Defaulting to no tools.",
+                                        user_query,
+                                        e,
+                                        decider_response_text
+                                    );
+                                    tool_decisions = Vec::new();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Error calling multi-tool decider for query '{}': {}. Defaulting to no tools.", user_query, e);
+                            tool_decisions = Vec::new();
+                        }
+                    }
+                } else {
+                    log::warn!("Decider Gemini API key is empty. No tools will be executed for query '{}'.", user_query);
+                    tool_decisions = Vec::new();
+                }
+
+                // Execute tools iteratively - allow for multiple rounds of tool calling
+                let mut tool_results: Vec<ToolExecutionResult> = Vec::new();
+                let mut all_tool_context = String::new();
+                let mut iteration_count = 0;
+                const MAX_ITERATIONS: usize = 3; // Prevent infinite loops
+                let mut current_tools = tool_decisions.clone();
+
+                while !current_tools.is_empty() && iteration_count < MAX_ITERATIONS {
+                    iteration_count += 1;
+                    log::info!(
+                        "Starting tool execution iteration {}/{}",
+                        iteration_count,
+                        MAX_ITERATIONS
                     );
 
-                    let decider_prompt =
-                        "You are an intelligent assistant that categorizes user queries to determine the best data retrieval strategy.\n".to_string() +
-                        "Analyze the user's query and decide if it primarily requires:\n" +
-                        "1. Factual information lookup about a specific topic, person, place, or concept (e.g., definitions, history, general knowledge). If so, respond with only the exact string \"WIKIPEDIA_LOOKUP\".\n" +
-                        "   Examples: \"What is photosynthesis?\", \"Tell me about the Eiffel Tower\", \"Who was Marie Curie?\"\n" +
-                        "2. Current weather conditions for a specific location. If so, respond with only the exact string \"WEATHER_LOOKUP\".\n" +
-                        "   Examples: \"weather in San Francisco\", \"what's the temperature in London?\", \"Is it raining in Tokyo?\"\n" +
-                        "3. Specific financial market data for a publicly traded stock or symbol. If so, respond with only the exact string \"FINANCIAL_DATA\".\n" +
-                        "   Examples: \"What is the stock price of GOOGL?\", \"AAPL stock quote\"\n" +
-                        "4. Academic paper or research search on arXiv, potentially for summarization or specific information. If so, respond with only the exact string \"ARXIV_LOOKUP\".\n" +
-                        "   Examples: \"Find papers on diffusion models on arXiv\", \"arXiv search for 'attention is all you need' paper\", \"summarize the research paper 'Language Models are Unsupervised Multitask Learners'\", \"What are the key findings of the paper 'BERT: Pre-training of Deep Bidirectional Transformers' from arXiv?\"\n" +
-                        "5. No external data lookup, meaning the query is conversational, a command, a creative request, or can be answered from general LLM knowledge. If so, respond with only the exact string \"NO_LOOKUP\".\n" +
-                        "   Examples: \"Tell me a joke.\", \"Summarize this text for me: ...\", \"What is the capital of Germany?\"\n" +
-                        &format!("User query: '{}'\n", user_query) +
-                        "Based on this query, respond with one of the exact strings: \"WIKIPEDIA_LOOKUP\", \"WEATHER_LOOKUP\", \"FINANCIAL_DATA\", \"ARXIV_LOOKUP\", or \"NO_LOOKUP\".";
+                    // Sort tools by priority (1 = highest priority)
+                    let mut sorted_tools = current_tools.clone();
+                    sorted_tools.sort_by_key(|t| t.priority);
 
-                    let decider_messages = vec![ChatMessage {
-                        role: "user".to_string(),
-                        content: decider_prompt,
-                        image_base64_data: None,
-                        image_mime_type: None,
-                        image_file_api_uri: None,
-                    }];
-                    let decider_model_name = "gemini-2.0-flash".to_string();
+                    let mut iteration_context = String::new();
+                    let mut new_tool_requests: Vec<ToolDecision> = Vec::new();
 
-                    let decider_gemini_api_key_string = match config.gemini_api_key.clone() {
-                        Some(key) if !key.is_empty() => key,
-                        _ => {
-                            log::warn!(
-                                "Gemini API key not set for decider. Defaulting to NO_LOOKUP."
-                            );
-                            String::new()
+                    for tool_decision in sorted_tools {
+                        log::info!(
+                            "Executing tool {:?} with query: '{}' (priority: {})",
+                            tool_decision.tool_type,
+                            tool_decision.query,
+                            tool_decision.priority
+                        );
+
+                        match tool_decision.tool_type {
+                            ToolType::WikipediaLookup => {
+                                let max_iterations = 4;
+
+                                if let Err(e) = window.emit(
+                                    "ARTICLE_LOOKUP_STARTED",
+                                    ArticleLookupStartedPayload {
+                                        query: tool_decision.query.clone(),
+                                    },
+                                ) {
+                                    log::warn!(
+                                        "Failed to emit ARTICLE_LOOKUP_STARTED event: {}",
+                                        e
+                                    );
+                                }
+
+                                match perform_iterative_wikipedia_research(
+                                    &client,
+                                    &tool_decision.query,
+                                    &decider_gemini_api_key_string,
+                                    &decider_model_name,
+                                    max_iterations,
+                                )
+                                .await
+                                {
+                                    Ok(results) => {
+                                        if results.is_empty() {
+                                            log::info!("Wikipedia lookup for '{}' completed, but no information found.", tool_decision.query);
+
+                                            tool_results.push(ToolExecutionResult {
+                                                tool_type: ToolType::WikipediaLookup,
+                                                query: tool_decision.query.clone(),
+                                                success: true,
+                                                content: Some("No specific information found after iterative search.".to_string()),
+                                                error: None,
+                                            });
+
+                                            if let Err(e) = window.emit(
+                                                "ARTICLE_LOOKUP_COMPLETED",
+                                                ArticleLookupCompletedPayload {
+                                                    query: tool_decision.query.clone(),
+                                                    success: true,
+                                                    summary: Some("No specific information found after iterative search.".to_string()),
+                                                    source_name: None,
+                                                    source_url: None,
+                                                    error: None,
+                                                },
+                                            ) {
+                                                log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED event: {}", e);
+                                            }
+                                        } else {
+                                            log::info!("Wikipedia lookup successful for '{}'. Found {} results.", tool_decision.query, results.len());
+                                            let mut combined_summary = String::new();
+                                            let mut combined_source_names = Vec::<String>::new();
+                                            let mut combined_source_urls = Vec::<String>::new();
+
+                                            for res in results.iter() {
+                                                combined_summary.push_str(&format!(
+                                                    "Title: {}\nSummary: {}\n\n",
+                                                    res.title, res.summary,
+                                                ));
+                                                combined_source_names.push(res.title.clone());
+                                                combined_source_urls.push(res.url.clone());
+                                            }
+
+                                            let context_text = format!(
+                                                "Wikipedia Research Results for '{}':\n\n{}",
+                                                tool_decision.query,
+                                                combined_summary.trim_end()
+                                            );
+
+                                            tool_results.push(ToolExecutionResult {
+                                                tool_type: ToolType::WikipediaLookup,
+                                                query: tool_decision.query.clone(),
+                                                success: true,
+                                                content: Some(context_text.clone()),
+                                                error: None,
+                                            });
+
+                                            iteration_context
+                                                .push_str(&format!("{}\n\n", context_text));
+
+                                            if let Err(e) = window.emit(
+                                                "ARTICLE_LOOKUP_COMPLETED",
+                                                ArticleLookupCompletedPayload {
+                                                    query: tool_decision.query.clone(),
+                                                    success: true,
+                                                    summary: Some(
+                                                        combined_summary.trim_end().to_string(),
+                                                    ),
+                                                    source_name: Some(combined_source_names),
+                                                    source_url: Some(combined_source_urls),
+                                                    error: None,
+                                                },
+                                            ) {
+                                                log::warn!(
+                                                    "Failed to emit ARTICLE_LOOKUP_COMPLETED event: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Wikipedia lookup failed for '{}': {}",
+                                            tool_decision.query,
+                                            e
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::WikipediaLookup,
+                                            query: tool_decision.query.clone(),
+                                            success: false,
+                                            content: None,
+                                            error: Some(e.clone()),
+                                        });
+
+                                        if let Err(emit_error) = window.emit(
+                                            "ARTICLE_LOOKUP_COMPLETED",
+                                            ArticleLookupCompletedPayload {
+                                                query: tool_decision.query.clone(),
+                                                success: false,
+                                                summary: None,
+                                                source_name: None,
+                                                source_url: None,
+                                                error: Some(e),
+                                            },
+                                        ) {
+                                            log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED error event: {}", emit_error);
+                                        }
+                                    }
+                                }
+                            }
+                            ToolType::WeatherLookup => {
+                                if let Err(e) = window.emit(
+                                    "WEATHER_LOOKUP_STARTED",
+                                    WeatherLookupStartedPayload {
+                                        location: tool_decision.query.clone(),
+                                    },
+                                ) {
+                                    log::warn!(
+                                        "Failed to emit WEATHER_LOOKUP_STARTED event: {}",
+                                        e
+                                    );
+                                }
+
+                                match perform_weather_lookup(
+                                    &client,
+                                    &tool_decision.query,
+                                    &decider_gemini_api_key_string,
+                                    decider_model_name.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(Some((temperature, unit, description, location))) => {
+                                        let weather_text = format!(
+                                            "Weather in {}: {}°{} - {}",
+                                            location, temperature, unit, description
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::WeatherLookup,
+                                            query: tool_decision.query.clone(),
+                                            success: true,
+                                            content: Some(weather_text.clone()),
+                                            error: None,
+                                        });
+
+                                        iteration_context.push_str(&format!(
+                                            "Weather Information for '{}':\n{}\n\n",
+                                            tool_decision.query, weather_text
+                                        ));
+
+                                        if let Err(e) = window.emit(
+                                            "WEATHER_LOOKUP_COMPLETED",
+                                            WeatherLookupCompletedPayload {
+                                                location: tool_decision.query.clone(),
+                                                success: true,
+                                                temperature: Some(temperature),
+                                                unit: Some(unit),
+                                                description: Some(description),
+                                                error: None,
+                                            },
+                                        ) {
+                                            log::warn!(
+                                                "Failed to emit WEATHER_LOOKUP_COMPLETED event: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        let no_weather_text = format!(
+                                            "Unable to find weather information for '{}'",
+                                            tool_decision.query
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::WeatherLookup,
+                                            query: tool_decision.query.clone(),
+                                            success: false,
+                                            content: Some(no_weather_text.clone()),
+                                            error: Some("Location not found".to_string()),
+                                        });
+
+                                        if let Err(e) = window.emit(
+                                            "WEATHER_LOOKUP_COMPLETED",
+                                            WeatherLookupCompletedPayload {
+                                                location: tool_decision.query.clone(),
+                                                success: false,
+                                                temperature: None,
+                                                unit: None,
+                                                description: None,
+                                                error: Some("Location not found".to_string()),
+                                            },
+                                        ) {
+                                            log::warn!(
+                                                "Failed to emit WEATHER_LOOKUP_COMPLETED event: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Weather lookup failed for '{}': {}",
+                                            tool_decision.query,
+                                            e
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::WeatherLookup,
+                                            query: tool_decision.query.clone(),
+                                            success: false,
+                                            content: None,
+                                            error: Some(e.clone()),
+                                        });
+
+                                        if let Err(emit_error) = window.emit(
+                                            "WEATHER_LOOKUP_COMPLETED",
+                                            WeatherLookupCompletedPayload {
+                                                location: tool_decision.query.clone(),
+                                                success: false,
+                                                temperature: None,
+                                                unit: None,
+                                                description: None,
+                                                error: Some(e),
+                                            },
+                                        ) {
+                                            log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED error event: {}", emit_error);
+                                        }
+                                    }
+                                }
+                            }
+                            ToolType::FinancialData => {
+                                if let Err(e) = window.emit(
+                                    "FINANCIAL_DATA_STARTED",
+                                    FinancialDataStartedPayload {
+                                        query: tool_decision.query.clone(),
+                                        symbol: tool_decision.query.clone(),
+                                    },
+                                ) {
+                                    log::warn!(
+                                        "Failed to emit FINANCIAL_DATA_STARTED event: {}",
+                                        e
+                                    );
+                                }
+
+                                match perform_financial_data_lookup(&client, &tool_decision.query)
+                                    .await
+                                {
+                                    Ok(financial_data) => {
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::FinancialData,
+                                            query: tool_decision.query.clone(),
+                                            success: true,
+                                            content: Some(financial_data.clone()),
+                                            error: None,
+                                        });
+
+                                        iteration_context.push_str(&format!(
+                                            "Financial Data for '{}':\n{}\n\n",
+                                            tool_decision.query, financial_data
+                                        ));
+
+                                        if let Err(e) = window.emit(
+                                            "FINANCIAL_DATA_COMPLETED",
+                                            FinancialDataCompletedPayload {
+                                                query: tool_decision.query.clone(),
+                                                symbol: tool_decision.query.clone(),
+                                                success: true,
+                                                data: Some(financial_data),
+                                                error: None,
+                                            },
+                                        ) {
+                                            log::warn!(
+                                                "Failed to emit FINANCIAL_DATA_COMPLETED event: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Financial data lookup failed for '{}': {}",
+                                            tool_decision.query,
+                                            e
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::FinancialData,
+                                            query: tool_decision.query.clone(),
+                                            success: false,
+                                            content: None,
+                                            error: Some(e.clone()),
+                                        });
+
+                                        if let Err(emit_error) = window.emit(
+                                            "FINANCIAL_DATA_COMPLETED",
+                                            FinancialDataCompletedPayload {
+                                                query: tool_decision.query.clone(),
+                                                symbol: tool_decision.query.clone(),
+                                                success: false,
+                                                data: None,
+                                                error: Some(e),
+                                            },
+                                        ) {
+                                            log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED error event: {}", emit_error);
+                                        }
+                                    }
+                                }
+                            }
+                            ToolType::ArxivLookup => {
+                                if let Err(e) = window.emit(
+                                    "ARXIV_LOOKUP_STARTED",
+                                    ArxivLookupStartedPayload {
+                                        query: tool_decision.query.clone(),
+                                    },
+                                ) {
+                                    log::warn!("Failed to emit ARXIV_LOOKUP_STARTED event: {}", e);
+                                }
+
+                                match perform_arxiv_lookup(&client, tool_decision.query.clone())
+                                    .await
+                                {
+                                    Ok(papers) => {
+                                        if papers.is_empty() {
+                                            tool_results.push(ToolExecutionResult {
+                                                tool_type: ToolType::ArxivLookup,
+                                                query: tool_decision.query.clone(),
+                                                success: true,
+                                                content: Some("No papers found.".to_string()),
+                                                error: None,
+                                            });
+
+                                            if let Err(e) = window.emit(
+                                                "ARXIV_LOOKUP_COMPLETED",
+                                                ArxivLookupCompletedPayload {
+                                                    query: tool_decision.query.clone(),
+                                                    success: true,
+                                                    results: Some(vec![]),
+                                                    error: None,
+                                                },
+                                            ) {
+                                                log::warn!(
+                                                    "Failed to emit ARXIV_LOOKUP_COMPLETED event: {}",
+                                                    e
+                                                );
+                                            }
+                                        } else {
+                                            let mut arxiv_context = String::new();
+                                            for paper in &papers {
+                                                arxiv_context.push_str(&format!(
+                                                    "Title: {}\nAuthors: {}\nSummary: {}\n\n",
+                                                    paper.title,
+                                                    paper.authors.join(", "),
+                                                    paper.abstract_text
+                                                ));
+                                            }
+
+                                            tool_results.push(ToolExecutionResult {
+                                                tool_type: ToolType::ArxivLookup,
+                                                query: tool_decision.query.clone(),
+                                                success: true,
+                                                content: Some(arxiv_context.clone()),
+                                                error: None,
+                                            });
+
+                                            iteration_context.push_str(&format!(
+                                                "ArXiv Research for '{}':\n{}\n\n",
+                                                tool_decision.query, arxiv_context
+                                            ));
+
+                                            if let Err(e) = window.emit(
+                                                "ARXIV_LOOKUP_COMPLETED",
+                                                ArxivLookupCompletedPayload {
+                                                    query: tool_decision.query.clone(),
+                                                    success: true,
+                                                    results: Some(
+                                                        papers
+                                                            .iter()
+                                                            .map(|p| ArxivPaperSummary {
+                                                                title: p.title.clone(),
+                                                                summary: p.abstract_text.clone(),
+                                                                authors: p.authors.clone(),
+                                                                id: p.id.clone(),
+                                                                published_date: Some(
+                                                                    p.published.clone(),
+                                                                ),
+                                                                pdf_url: p.pdf_url.clone(),
+                                                            })
+                                                            .collect(),
+                                                    ),
+                                                    error: None,
+                                                },
+                                            ) {
+                                                log::warn!(
+                                                    "Failed to emit ARXIV_LOOKUP_COMPLETED event: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "ArXiv lookup failed for '{}': {}",
+                                            tool_decision.query,
+                                            e
+                                        );
+
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_type: ToolType::ArxivLookup,
+                                            query: tool_decision.query.clone(),
+                                            success: false,
+                                            content: None,
+                                            error: Some(e.clone()),
+                                        });
+
+                                        if let Err(emit_error) = window.emit(
+                                            "ARXIV_LOOKUP_COMPLETED",
+                                            ArxivLookupCompletedPayload {
+                                                query: tool_decision.query.clone(),
+                                                success: false,
+                                                results: Some(vec![]),
+                                                error: Some(e),
+                                            },
+                                        ) {
+                                            log::warn!(
+                                                "Failed to emit ARXIV_LOOKUP_COMPLETED error event: {}",
+                                                emit_error
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    };
+                    }
 
-                    let decision: String; // Initialize decision
-                    if !decider_gemini_api_key_string.is_empty() {
+                    // Add iteration context to overall context
+                    all_tool_context.push_str(&iteration_context);
+
+                    // After each iteration, check if we need more tools based on results
+                    if iteration_count < MAX_ITERATIONS && !iteration_context.is_empty() {
+                        let follow_up_prompt = format!(
+                        "Based on the following research results, determine if additional tools are needed to fully answer the user's query: '{}'\n\n\
+                        Research Results So Far:\n{}\n\n\
+                        AVAILABLE TOOLS for follow-up:\n\
+                        1. WIKIPEDIA_LOOKUP: Use GENERIC terms only (e.g., \"artificial intelligence\", not \"AI companies\")\n\
+                        2. WEATHER_LOOKUP: Weather for specific cities (use city names)\n\
+                        3. FINANCIAL_DATA: Stock data (use ticker symbols like AAPL, GOOGL, TSLA)\n\
+                        4. ARXIV_LOOKUP: Academic papers\n\n\
+                        IMPORTANT GUIDELINES:\n\
+                        - For Wikipedia: Use broad, foundational terms, not specific subtopics\n\
+                        - For Financial: Extract exact ticker symbols from companies mentioned in research\n\
+                        - Example: If research mentions 'IBM Corporation', use ticker 'IBM' for financial lookup\n\n\
+                        Respond with JSON:\n\
+                        - If MORE tools needed: {{\"tools\": [{{\"tool_type\": \"...\", \"query\": \"...\", \"reasoning\": \"...\", \"priority\": 1}}], \"reasoning\": \"why more tools needed\"}}\n\
+                        - If NO more tools needed: {{\"tools\": [], \"reasoning\": \"sufficient information gathered\"}}\n\n\
+                        Be specific with queries - use exact ticker symbols for stocks, city names for weather.",
+                        user_query,
+                        all_tool_context.trim_end()
+                    );
+
+                        let follow_up_messages = vec![ChatMessage {
+                            role: "user".to_string(),
+                            content: follow_up_prompt,
+                            image_base64_data: None,
+                            image_mime_type: None,
+                            image_file_api_uri: None,
+                        }];
+
                         match call_gemini_api_non_streaming(
                             &client,
-                            decider_messages,
+                            follow_up_messages,
                             &decider_gemini_api_key_string,
                             decider_model_name.clone(),
                         )
                         .await
                         {
-                            Ok(decider_response_text) => {
-                                let cleaned_response = decider_response_text.trim().to_uppercase();
-                                log::info!(
-                                    "Decider model response for query '{}': '{}'",
-                                    user_query,
-                                    cleaned_response
-                                );
-                                if [
-                                    "WIKIPEDIA_LOOKUP",
-                                    "WEATHER_LOOKUP",
-                                    "FINANCIAL_DATA",
-                                    "ARXIV_LOOKUP",
-                                    "NO_LOOKUP",
-                                ]
-                                .contains(&cleaned_response.as_str())
-                                {
-                                    decision = cleaned_response;
-                                } else {
-                                    log::warn!("Decider model returned an unexpected response: '{}'. Defaulting to NO_LOOKUP.", decider_response_text);
-                                    decision = "NO_LOOKUP".to_string();
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Error calling decider model for query '{}': {}. Defaulting to NO_LOOKUP.", user_query, e);
-                                decision = "NO_LOOKUP".to_string();
-                            }
-                        }
-                    } else {
-                        log::warn!("Decider Gemini API key is empty. Defaulting to NO_LOOKUP for query '{}'.", user_query);
-                        decision = "NO_LOOKUP".to_string(); // Ensure decision is NO_LOOKUP if key is empty
-                    }
+                            Ok(follow_up_response) => {
+                                let cleaned_response = follow_up_response
+                                    .trim()
+                                    .trim_start_matches("```json")
+                                    .trim_start_matches("```")
+                                    .trim_end_matches("```")
+                                    .trim();
 
-                    // Replace if decision == "WEB_SEARCH" logic with new cases
-                    if decision == "WIKIPEDIA_LOOKUP" {
-                        log::info!(
-                            "Iterative Wikipedia lookup DECIDED for query: '{}'",
-                            user_query
-                        );
-                        let max_iterations = 4; // Max iterations for the research
-
-                        if let Err(e) = window.emit(
-                            "ARTICLE_LOOKUP_STARTED",
-                            ArticleLookupStartedPayload {
-                                query: user_query.to_string(), // Use the original user query for the event
-                            },
-                        ) {
-                            log::warn!("Failed to emit ARTICLE_LOOKUP_STARTED event: {}", e);
-                        }
-
-                        match perform_iterative_wikipedia_research(
-                            &client,
-                            user_query,
-                            &decider_gemini_api_key_string, // API key
-                            &decider_model_name,            // Model for internal calls
-                            max_iterations,
-                        )
-                        .await
-                        {
-                            Ok(results) => {
-                                if results.is_empty() {
-                                    log::info!("Iterative Wikipedia lookup for query '{}' completed, but no specific information found.", user_query);
-                                    if let Err(e) = window.emit(
-                                                               "ARTICLE_LOOKUP_COMPLETED",
-                                                               ArticleLookupCompletedPayload {
-                                                                   query: user_query.to_string(),
-                                                                   success: true, // Process completed
-                                                                   summary: Some("No specific information found after iterative search.".to_string()),
-                                                                   source_name: None,
-                                                                   source_url: None,
-                                                                   error: None,
-                                                               },
-                                                           ) {
-                                                               log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (no results) event: {}", e);
-                                                           }
-                                } else {
-                                    log::info!("Iterative Wikipedia lookup successful for query: '{}'. Found {} results.", user_query, results.len());
-                                    let mut combined_summary = String::new();
-                                    let mut combined_source_names = Vec::<String>::new();
-                                    let mut combined_source_urls = Vec::<String>::new();
-
-                                    for (_i, res) in results.iter().enumerate() {
-                                        combined_summary.push_str(&format!(
-                                            "Title: {}\nSummary: {}\n\n",
-                                            res.title, res.summary,
-                                        ));
-                                        combined_source_names.push(res.title.clone());
-                                        combined_source_urls.push(res.url.clone());
-                                    }
-
-                                    article_lookup_result_text = Some(format!(
-                                                               "Context from Iterative Wikipedia Search for user query '{}':\n\n{}",
-                                                               user_query,
-                                                               combined_summary.trim_end()
-                                                           ));
-                                    article_lookup_performed_successfully = true;
-
-                                    if let Err(e) = window.emit(
-                                        "ARTICLE_LOOKUP_COMPLETED",
-                                        ArticleLookupCompletedPayload {
-                                            query: user_query.to_string(),
-                                            success: true,
-                                            summary: Some(combined_summary),
-                                            source_name: Some(combined_source_names),
-                                            source_url: Some(combined_source_urls),
-                                            error: None,
-                                        },
-                                    ) {
-                                        log::warn!("Failed to emit ARTICLE_LOOKUP_COMPLETED (success) event: {}", e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::error!(
-                                    "Iterative Wikipedia lookup failed for query '{}'. Error: {}",
-                                    user_query,
-                                    e
-                                );
-                                if let Err(emit_err) = window.emit(
-                                    "ARTICLE_LOOKUP_COMPLETED",
-                                    ArticleLookupCompletedPayload {
-                                        query: user_query.to_string(),
-                                        success: false,
-                                        summary: None,
-                                        source_name: None,
-                                        source_url: None,
-                                        error: Some(e.clone()),
-                                    },
+                                match serde_json::from_str::<MultiToolDecisionResponse>(
+                                    cleaned_response,
                                 ) {
-                                    log::warn!(
-                                        "Failed to emit ARTICLE_LOOKUP_COMPLETED (error) event: {}",
-                                        emit_err
-                                    );
-                                }
-                            }
-                        }
-                    } else if decision == "WEATHER_LOOKUP" {
-                        log::info!("Weather lookup DECIDED for query: '{}'", user_query);
+                                    Ok(follow_up_decision) => {
+                                        log::info!(
+                                            "Follow-up tool decision (iteration {}): {} tools requested",
+                                            iteration_count,
+                                            follow_up_decision.tools.len()
+                                        );
 
-                        // Pass the original user_query to perform_weather_lookup,
-                        // which will internally call the location extractor.
-                        // Also pass the Gemini API key and a model for the extractor.
-                        if let Err(e) = window.emit(
-                            "WEATHER_LOOKUP_STARTED",
-                            WeatherLookupStartedPayload {
-                                location: user_query.to_string(),
-                            },
-                        ) {
-                            log::warn!("Failed to emit WEATHER_LOOKUP_STARTED event: {}", e);
-                        }
-                        match perform_weather_lookup(
-                            &client,
-                            user_query,
-                            &decider_gemini_api_key_string,
-                            "gemini-2.0-flash".to_string(),
-                        )
-                        .await
-                        {
-                            Ok(Some((temp, unit, description, resolved_location))) => {
-                                log::info!("Weather lookup successful for '{}' (resolved: {}). Temp: {} {}", user_query, resolved_location, temp, unit);
-                                if let Err(e) = window.emit(
-                                    "WEATHER_LOOKUP_COMPLETED",
-                                    WeatherLookupCompletedPayload {
-                                        location: resolved_location.clone(), // Use the (potentially more precise) resolved location from geocoding
-                                        success: true,
-                                        temperature: Some(temp),
-                                        unit: Some(unit.clone()),
-                                        description: Some(description.clone()),
-                                        error: None,
-                                    },
-                                ) {
-                                    log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED (success) event: {}", e);
-                                }
-                                weather_lookup_result_text = Some(format!(
-                                    "Current weather for {}: {} {}. {}.",
-                                    resolved_location, temp, unit, description
-                                ));
-                                weather_lookup_performed_successfully = true;
-                            }
-                            Ok(None) => {
-                                log::info!("Weather lookup for '{}' completed, but no weather data found (likely geocoding or location extraction failed, or no data for coords).", user_query);
-                                if let Err(e) = window.emit(
-                                    "WEATHER_LOOKUP_COMPLETED",
-                                    WeatherLookupCompletedPayload {
-                                        location: user_query.to_string(), // Fallback to original query for event if resolution failed
-                                        success: true,
-                                        temperature: None,
-                                        unit: None,
-                                        description: None,
-                                        error: None,
-                                    },
-                                ) {
-                                    log::warn!("Failed to emit WEATHER_LOOKUP_COMPLETED (no data) event: {}", e);
-                                }
-                            }
-                            Err(e) => {
-                                log::error!(
-                                    "Weather lookup failed for '{}'. Error: {}",
-                                    user_query,
-                                    e
-                                );
-                                if let Err(emit_err) = window.emit(
-                                    "WEATHER_LOOKUP_COMPLETED",
-                                    WeatherLookupCompletedPayload {
-                                        location: user_query.to_string(),
-                                        success: false,
-                                        temperature: None,
-                                        unit: None,
-                                        description: None,
-                                        error: Some(e.clone()),
-                                    },
-                                ) {
-                                    log::warn!(
-                                        "Failed to emit WEATHER_LOOKUP_COMPLETED (error) event: {}",
-                                        emit_err
-                                    );
-                                }
-                            }
-                        }
-                    } else if decision == "FINANCIAL_DATA" {
-                        log::info!("Financial data lookup DECIDED for query: '{}'", user_query);
-                        if let Some(symbol) = extract_stock_symbol(user_query) {
-                            log::info!("Extracted symbol '{}' for financial data lookup.", symbol);
-                            if let Err(e) = window.emit(
-                                "FINANCIAL_DATA_STARTED",
-                                FinancialDataStartedPayload {
-                                    query: user_query.to_string(),
-                                    symbol: symbol.clone(),
-                                },
-                            ) {
-                                log::warn!("Failed to emit FINANCIAL_DATA_STARTED event: {}", e);
-                            }
-
-                            match perform_financial_data_lookup(&client, &symbol).await {
-                                Ok(data) => {
-                                    log::info!(
-                                        "Financial data lookup successful for symbol: '{}'.",
-                                        symbol
-                                    );
-                                    if let Err(e) = window.emit(
-                                        "FINANCIAL_DATA_COMPLETED",
-                                        FinancialDataCompletedPayload {
-                                            query: user_query.to_string(),
-                                            symbol: symbol.clone(),
-                                            success: true,
-                                            data: Some(data.clone()),
-                                            error: None,
-                                        },
-                                    ) {
-                                        log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (success) event: {}", e);
-                                    }
-                                    financial_data_result_text =
-                                        Some(format!("Financial data for {}\n{}", symbol, data));
-                                    financial_data_fetched_successfully = true;
-                                }
-                                Err(e) => {
-                                    log::error!(
-                                        "Financial data lookup failed for symbol: '{}'. Error: {}",
-                                        symbol,
-                                        e
-                                    );
-                                    if let Err(emit_err) = window.emit(
-                                        "FINANCIAL_DATA_COMPLETED",
-                                        FinancialDataCompletedPayload {
-                                            query: user_query.to_string(),
-                                            symbol: symbol.clone(),
-                                            success: false,
-                                            data: None,
-                                            error: Some(e.clone()),
-                                        },
-                                    ) {
-                                        log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (error) event: {}", emit_err);
-                                    }
-                                }
-                            }
-                        } else {
-                            log::warn!("Financial data lookup decided, but could not extract symbol from query: '{}'. Skipping financial lookup.", user_query);
-                            // Emit a FINANCIAL_DATA_COMPLETED event to inform the frontend about the symbol extraction failure.
-                            if let Err(e) = window.emit(
-                                "FINANCIAL_DATA_COMPLETED",
-                                FinancialDataCompletedPayload {
-                                    query: user_query.to_string(),
-                                    symbol: user_query.to_string(), // Use original query as a fallback for display
-                                    success: false,
-                                    data: None,
-                                    error: Some(
-                                        "Could not identify a stock symbol in your query"
-                                            .to_string(),
-                                    ),
-                                },
-                            ) {
-                                log::warn!("Failed to emit FINANCIAL_DATA_COMPLETED (symbol extraction failure) event: {}", e);
-                            }
-                        }
-                    } else if decision == "ARXIV_LOOKUP" {
-                        log::info!("ArXiv lookup DECIDED for query: '{}'", user_query);
-                        if let Err(e) = window.emit(
-                            "ARXIV_LOOKUP_STARTED",
-                            ArxivLookupStartedPayload {
-                                query: user_query.to_string(),
-                            },
-                        ) {
-                            log::warn!("Failed to emit ARXIV_LOOKUP_STARTED event: {}", e);
-                        }
-
-                        // Use LLM to extract search parameters for arXiv
-                        match extract_arxiv_query_parameters(
-                            &client,
-                            user_query,
-                            &decider_gemini_api_key_string,
-                            &decider_model_name,
-                        )
-                        .await
-                        {
-                            Ok(arxiv_search_string) => {
-                                // MODIFIED: Now expects Ok(String)
-                                match perform_arxiv_lookup(&client, arxiv_search_string).await {
-                                    // MODIFIED: Pass client and string
-                                    Ok(papers) => {
-                                        log::info!("ArXiv lookup successful for query: '{}'. Found {} papers.", user_query, papers.len());
-                                        let summaries: Vec<ArxivPaperSummary> = papers
-                                            .iter()
-                                            .map(|p| ArxivPaperSummary {
-                                                title: p.title.clone(),
-                                                summary: p.abstract_text.clone(), // FIX: Use abstract_text
-                                                authors: p.authors.clone(),
-                                                id: p.id.clone(),
-                                                published_date: Some(p.published.clone()), // FIX: Wrap in Some()
-                                                pdf_url: format!(
-                                                    "https://arxiv.org/pdf/{}",
-                                                    p.id.replace("http://arxiv.org/abs/", "")
-                                                ),
-                                            })
-                                            .collect();
-
-                                        if let Err(e) = window.emit(
-                                            "ARXIV_LOOKUP_COMPLETED",
-                                            ArxivLookupCompletedPayload {
-                                                query: user_query.to_string(),
-                                                success: true,
-                                                results: Some(summaries.clone()),
-                                                error: None,
-                                            },
-                                        ) {
-                                            log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (success) event: {}", e);
+                                        if follow_up_decision.tools.is_empty() {
+                                            log::info!("No additional tools requested, stopping iterations");
+                                            break;
+                                        } else {
+                                            // For financial queries, extract ticker symbols from previous context
+                                            for tool in follow_up_decision.tools {
+                                                if tool.tool_type == ToolType::FinancialData {
+                                                    // First try to use the query directly if it looks like a ticker symbol
+                                                    let query_upper =
+                                                        tool.query.trim().to_uppercase();
+                                                    if query_upper.len() <= 5
+                                                        && query_upper
+                                                            .chars()
+                                                            .all(|c| c.is_alphabetic())
+                                                    {
+                                                        // Looks like a ticker symbol already
+                                                        log::info!("Using query as ticker symbol directly: {}", query_upper);
+                                                        new_tool_requests.push(ToolDecision {
+                                                            tool_type: ToolType::FinancialData,
+                                                            query: query_upper.clone(),
+                                                            reasoning: format!(
+                                                                "Stock data for {} (direct symbol)",
+                                                                query_upper
+                                                            ),
+                                                            priority: tool.priority,
+                                                        });
+                                                    } else {
+                                                        // Try to extract ticker symbols from the query or context
+                                                        if let Ok(symbols) =
+                                                            extract_ticker_symbols_from_companies(
+                                                                &client,
+                                                                &format!(
+                                                                    "{} {}",
+                                                                    tool.query, all_tool_context
+                                                                ),
+                                                                &decider_gemini_api_key_string,
+                                                                decider_model_name.clone(),
+                                                            )
+                                                            .await
+                                                        {
+                                                            if !symbols.is_empty() {
+                                                                // Create separate tool calls for each ticker symbol
+                                                                for symbol in symbols {
+                                                                    new_tool_requests.push(ToolDecision {
+                                                                        tool_type: ToolType::FinancialData,
+                                                                        query: symbol.clone(),
+                                                                        reasoning: format!("Stock data for {} (extracted from: {})", symbol, tool.reasoning),
+                                                                        priority: tool.priority,
+                                                                    });
+                                                                }
+                                                            } else {
+                                                                // No valid symbols found, try the original query as fallback
+                                                                log::warn!("No valid ticker symbols extracted from: {}, trying original query", tool.query);
+                                                                new_tool_requests.push(tool);
+                                                            }
+                                                        } else {
+                                                            // Fallback: use the original query if extraction fails
+                                                            new_tool_requests.push(tool);
+                                                        }
+                                                    }
+                                                } else {
+                                                    new_tool_requests.push(tool);
+                                                }
+                                            }
                                         }
-                                        let mut result_text_parts = Vec::new();
-                                        for summary in summaries.iter().take(2) {
-                                            // Limit to 2 summaries for context
-                                            result_text_parts.push(format!(
-                                                "Title: {}\nAuthors: {}\nSummary: {}\nPDF: {}\n",
-                                                summary.title,
-                                                summary.authors.join(", "),
-                                                summary.summary.clone(), // Ensure no "..." here
-                                                summary.pdf_url
-                                            ));
-                                        }
-                                        arxiv_lookup_result_text = Some(format!(
-                                            "Context from ArXiv Search for user query '{}':\n\n{}",
-                                            user_query,
-                                            result_text_parts.join("\n\n")
-                                        ));
-                                        arxiv_lookup_performed_successfully = true;
                                     }
                                     Err(e) => {
-                                        log::error!(
-                                            "ArXiv lookup failed for query '{}'. Error: {}",
-                                            user_query,
+                                        log::warn!(
+                                            "Failed to parse follow-up tool decision: {}",
                                             e
                                         );
-                                        if let Err(emit_err) = window.emit(
-                                            "ARXIV_LOOKUP_COMPLETED",
-                                            ArxivLookupCompletedPayload {
-                                                query: user_query.to_string(),
-                                                success: false,
-                                                results: None,
-                                                error: Some(e.clone()),
-                                            },
-                                        ) {
-                                            log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (error) event: {}", emit_err);
-                                        }
+                                        break;
                                     }
                                 }
                             }
                             Err(e) => {
-                                // MODIFIED: Handle Err from extract_arxiv_query_parameters
-                                log::error!("Failed to extract ArXiv query parameters for query '{}'. Error: {}. Emitting error event.", user_query, e);
-                                if let Err(emit_err) = window.emit(
-                                    "ARXIV_LOOKUP_COMPLETED",
-                                    ArxivLookupCompletedPayload {
-                                        query: user_query.to_string(),
-                                        success: false,
-                                        results: None,
-                                        error: Some(format!(
-                                            "Failed to understand search parameters: {}",
-                                            e
-                                        )),
-                                    },
-                                ) {
-                                    log::warn!("Failed to emit ARXIV_LOOKUP_COMPLETED (param extraction error) event: {}", emit_err);
-                                }
+                                log::error!("Failed to get follow-up tool decision: {}", e);
+                                break;
                             }
                         }
-                    } else {
-                        // NO_LOOKUP
-                        log::info!(
-                            "External data lookup (Web/Financial) NOT decided for query: '{}'",
-                            user_query
-                        );
                     }
+
+                    // Set up next iteration
+                    current_tools = new_tool_requests;
                 }
+
+                // After all iterations complete, set context for the main AI response
+                if !all_tool_context.is_empty() {
+                    comprehensive_tool_context = Some(format!(
+                        "Research Context from {} Tool Iterations:\n\n{}",
+                        iteration_count,
+                        all_tool_context.trim_end()
+                    ));
+                    tool_context_available = true;
+                }
+
+                log::info!(
+                    "Iterative tool execution completed for query '{}'. {} iterations, {} total tools executed, context gathered: {} chars",
+                    user_query,
+                    iteration_count,
+                    tool_results.len(),
+                    all_tool_context.len()
+                );
+            } else {
+                // No tools selected - continue with normal processing
+                log::info!("No tools selected for query: '{}'", user_query);
             }
         }
     }
 
-    // Construct final message list for LLM
-    if article_lookup_performed_successfully && article_lookup_result_text.is_some() {
+    // Add system instruction - include enhanced MCP guidance only if tools were used
+    let system_content = if tool_context_available {
+        // Tools were used, add detailed MCP guidance
+        use crate::mcp_simple::create_reasoning_enhanced_prompt;
+        create_reasoning_enhanced_prompt(SYSTEM_INSTRUCTION)
+    } else {
+        // No tools used, use standard system instruction
+        SYSTEM_INSTRUCTION.to_string()
+    };
+
+    final_messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: system_content,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
+    });
+
+    // Add comprehensive tool context if available
+    if tool_context_available && comprehensive_tool_context.is_some() {
         final_messages.push(ChatMessage {
             role: "user".to_string(),
             content: format!(
-                "Context from Wikipedia lookup:\n{}\n\n Given this context, please answer the following user query:",
-                article_lookup_result_text.as_deref().unwrap_or("No context available")
-            ),
-            image_base64_data: None,
-            image_mime_type: None,
-            image_file_api_uri: None,
-        });
-    } else if weather_lookup_performed_successfully && weather_lookup_result_text.is_some() {
-        final_messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: format!(
-                "Context from Weather lookup:\n{}\n\n Given this context, please answer the following user query:",
-                weather_lookup_result_text.as_deref().unwrap_or("No context available")
-            ),
-            image_base64_data: None,
-            image_mime_type: None,
-            image_file_api_uri: None,
-        });
-    } else if financial_data_fetched_successfully && financial_data_result_text.is_some() {
-        final_messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: format!(
-                "Context from Financial data lookup:\n{}\n\n Given this context, please answer the following user query:",
-                financial_data_result_text.as_deref().unwrap_or("No context available")
-            ),
-            image_base64_data: None,
-            image_mime_type: None,
-            image_file_api_uri: None,
-        });
-    } else if arxiv_lookup_performed_successfully && arxiv_lookup_result_text.is_some() {
-        // ADDED ArXiv
-        final_messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: format!(
-                "Context from ArXiv Search:\n{}\n\n Please answer the following user query:",
-                arxiv_lookup_result_text.unwrap()
+                "{}\n\nGiven this research context, please answer the following user query:",
+                comprehensive_tool_context
+                    .as_deref()
+                    .unwrap_or("No context available")
             ),
             image_base64_data: None,
             image_mime_type: None,
@@ -2708,6 +3005,87 @@ fn window_should_become_key(_panel: Panel) -> bool {
 }
 
 // --- ADDED: Location Extractor Function for Geocoding ---
+async fn extract_ticker_symbols_from_companies(
+    client: &reqwest::Client,
+    company_text: &str,
+    api_key: &str,
+    model_name: String,
+) -> Result<Vec<String>, String> {
+    // First check if the input is already a ticker symbol or comma-separated list of symbols
+    let potential_symbols: Vec<String> = company_text
+        .split(&[',', ' ', '\n', ';'])
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty() && s.len() <= 5 && s.chars().all(|c| c.is_alphabetic()))
+        .collect();
+
+    // If we have potential symbols, verify they're valid ticker symbols
+    if !potential_symbols.is_empty() && potential_symbols.len() <= 10 {
+        if potential_symbols
+            .iter()
+            .all(|s| s.len() >= 1 && s.len() <= 5)
+        {
+            log::info!(
+                "Input appears to be ticker symbols: {:?}",
+                potential_symbols
+            );
+            return Ok(potential_symbols);
+        }
+    }
+
+    let prompt = format!(
+        "Extract stock ticker symbols from the following text about companies. Return ONLY a JSON array of ticker symbols (e.g., [\"AAPL\", \"GOOGL\", \"TSLA\"]). \
+        Only include publicly traded companies with valid stock symbols. If no public companies are found, return an empty array [].\n\n\
+        IMPORTANT: If the input is already ticker symbols (like 'GOOGL', 'IBM', 'TSLA'), just return them as-is in the array.\n\n\
+        Examples:\n\
+        - Apple Inc. → [\"AAPL\"]\n\
+        - Google and Microsoft → [\"GOOGL\", \"MSFT\"]\n\
+        - IBM, Tesla, and Amazon → [\"IBM\", \"TSLA\", \"AMZN\"]\n\
+        - GOOGL → [\"GOOGL\"]\n\
+        - IBM IONQ → [\"IBM\", \"IONQ\"]\n\
+        - Private company XYZ → []\n\n\
+        Text to analyze:\n{}",
+        company_text
+    );
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+        image_base64_data: None,
+        image_mime_type: None,
+        image_file_api_uri: None,
+    }];
+
+    match call_gemini_api_non_streaming(client, messages, api_key, model_name).await {
+        Ok(response_text) => {
+            let cleaned_response = response_text
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+
+            match serde_json::from_str::<Vec<String>>(cleaned_response) {
+                Ok(symbols) => {
+                    log::info!("Extracted ticker symbols: {:?}", symbols);
+                    Ok(symbols)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to parse ticker symbols from response '{}': {}",
+                        cleaned_response,
+                        e
+                    );
+                    Ok(vec![]) // Return empty vec on parse failure
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to extract ticker symbols: {}", e);
+            Err(e)
+        }
+    }
+}
+
 async fn extract_location_for_geocoding(
     client: &reqwest::Client,
     user_query: &str, // The full user query, e.g., "what is the weather in Paris, France?"
@@ -3476,93 +3854,13 @@ pub fn run() {
             trigger_backend_window_toggle,
             set_enable_web_search,
             get_enable_web_search,
-            cancel_current_stream
+            cancel_current_stream,
+            get_tool_reasoning_guidance,
+            get_enhanced_system_prompt,
+            export_tool_capabilities
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-// --- ADDED: ArXiv Parameter Extractor ---
-async fn extract_arxiv_query_parameters(
-    client: &reqwest::Client,
-    user_query: &str,
-    gemini_api_key: &str,
-    model_name: &str,
-) -> Result<String, String> {
-    // MODIFIED: Return type is now Result<String, String>
-    let prompt = format!(
-        "You are an expert at understanding user queries for searching academic papers on arXiv. \
-        Your task is to extract search terms from the user's natural language query and structure them as a JSON object. \
-        The JSON object should have the following optional fields: \"title\", \"author\", \"abstract_text\". \
-        Only include a field in the JSON if the user explicitly mentions terms for that field. \
-        If the user query is a direct paper title, primarily use the \"title\" field. \
-        If the user mentions authors, include them in the \"author\" field. \
-        If the query implies searching the abstract, use \"abstract_text\". \
-        Do not invent information. If a field is not clearly specified, omit it from the JSON. \
-        Output ONLY the JSON object. \
-        Examples: \
-        User Query: 'Papers by Hinton on neural networks' \
-        JSON Output: {{\"author\": \"Hinton\", \"title\": \"neural networks\", \"abstract_text\": \"neural networks\"}} \
-        User Query: 'attention is all you need' \
-        JSON Output: {{\"title\": \"attention is all you need\"}} \
-        User Query: 'summarize \"Softpick: No Attention Sink, No Massive Activations with Rectified Softmax\" (Zuhri et al. 2025)' \
-        JSON Output: {{\"title\": \"Softpick: No Attention Sink, No Massive Activations with Rectified Softmax\", \"author\": \"Zuhri\"}} \
-        User Query: 'any papers on diffusion models' \
-        JSON Output: {{\"title\": \"diffusion models\", \"abstract_text\": \"diffusion models\"}} \
-        \n\nUser Query: '{}'\n\nJSON Output:",
-        user_query
-    );
-
-    let extractor_messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-        image_base64_data: None,
-        image_mime_type: None,
-        image_file_api_uri: None,
-    }];
-
-    log::info!(
-        "Requesting ArXiv query parameter extraction (as JSON) for query: '{}'",
-        user_query
-    );
-
-    match call_gemini_api_non_streaming(
-        client,
-        extractor_messages,
-        gemini_api_key,
-        model_name.to_string(),
-    )
-    .await
-    {
-        Ok(response_str) => {
-            let json_response_str = response_str
-                .trim()
-                .trim_start_matches("```json")
-                .trim_start_matches("```")
-                .trim_end_matches("```")
-                .trim();
-            log::info!(
-                "LLM suggested ArXiv parameters (JSON): {}",
-                json_response_str
-            );
-
-            match serde_json::from_str::<ArxivSearchParameters>(json_response_str) {
-                Ok(parsed_params) => Ok(build_final_arxiv_search_string(parsed_params, user_query)),
-                Err(e) => {
-                    log::error!("Failed to parse ArXiv parameters JSON: {}. Raw: '{}'. Falling back to original query for search string.", e, json_response_str);
-                    Ok(user_query
-                        .trim_matches(|c| c == '"' || c == '\'')
-                        .to_string()) // Fallback on JSON parsing error
-                }
-            }
-        }
-        Err(e) => {
-            log::error!("Error calling ArXiv parameter extractor LLM for query '{}': {}. Falling back to original query for search string.", user_query, e);
-            Ok(user_query
-                .trim_matches(|c| c == '"' || c == '\'')
-                .to_string()) // Fallback on LLM call error
-        }
-    }
 }
 
 // Helper function to clean titles for ArXiv search
@@ -3573,65 +3871,6 @@ fn clean_title(title_str: &str) -> String {
         .replace('—', " ")
         .replace('_', " ")
         .to_string()
-}
-
-// --- ADDED: Helper function to construct the final search query string for arXiv ---
-fn build_final_arxiv_search_string(
-    params: ArxivSearchParameters,
-    original_user_query: &str,
-) -> String {
-    let mut query_components: Vec<String> = Vec::new();
-
-    // Handle title: unfielded, unquoted
-    if let Some(title_str) = &params.title {
-        // Clean hyphens/dashes from title and trim quotes
-        let cleaned_title = clean_title(title_str)
-            .trim_matches(|c| c == '"' || c == '\'')
-            .to_string();
-        if !cleaned_title.is_empty() {
-            query_components.push(cleaned_title);
-        }
-    }
-
-    // Handle author: fielded, potentially quoted for phrases
-    if let Some(author_str) = &params.author {
-        let cleaned_author = author_str
-            .trim_matches(|c| c == '"' || c == '\'')
-            .to_string();
-        if !cleaned_author.is_empty() {
-            // arXiv API au: field. Quotes for exact phrase if space is present.
-            let author_query_part = if cleaned_author.contains(char::is_whitespace) {
-                format!("au:\"{}\"", cleaned_author)
-            } else {
-                format!("au:{}", cleaned_author)
-            };
-            query_components.push(author_query_part);
-        }
-    }
-
-    // Handle abstract: fielded, quoted for phrases
-    if let Some(abstract_str) = &params.abstract_text {
-        let cleaned_abstract = abstract_str
-            .trim_matches(|c| c == '"' || c == '\'')
-            .to_string();
-        if !cleaned_abstract.is_empty() {
-            query_components.push(format!("abs:\"{}\"", cleaned_abstract));
-        }
-    }
-
-    if query_components.is_empty() {
-        log::info!("No specific ArXiv parameters extracted, using original query for unfielded search: '{}'", original_user_query);
-        return original_user_query
-            .trim_matches(|c| c == '"' || c == '\'')
-            .to_string();
-    }
-
-    let final_query = query_components.join(" AND ");
-    log::info!(
-        "Constructed final ArXiv search query string: \"{}\"",
-        final_query
-    );
-    final_query
 }
 
 // --- ADDED: ArXiv Lookup Function ---
@@ -3962,4 +4201,37 @@ async fn upload_image_to_gemini_file_api(
         mime_type: response_json.file.mime_type, // Use mimeType from response
         file_uri: response_json.file.file_uri,
     })
+}
+
+// --- Simplified MCP (Model Context Protocol) Commands ---
+
+/// Get tool reasoning guidance for AI models
+#[tauri::command]
+async fn get_tool_reasoning_guidance() -> Result<String, String> {
+    use crate::mcp_simple::McpToolReasoning;
+
+    let guidance = McpToolReasoning::generate_tool_guidance();
+    match serde_json::to_string_pretty(&guidance) {
+        Ok(json_str) => Ok(json_str),
+        Err(e) => Err(format!("Failed to serialize guidance: {}", e)),
+    }
+}
+
+/// Get enhanced system prompt with tool reasoning guidance
+#[tauri::command]
+async fn get_enhanced_system_prompt(base_prompt: String) -> Result<String, String> {
+    use crate::mcp_simple::create_reasoning_enhanced_prompt;
+
+    Ok(create_reasoning_enhanced_prompt(&base_prompt))
+}
+
+/// Export tool capabilities and guidance as JSON
+#[tauri::command]
+async fn export_tool_capabilities() -> Result<String, String> {
+    use crate::mcp_simple::export_tool_guidance;
+
+    match export_tool_guidance() {
+        Ok(json_str) => Ok(json_str),
+        Err(e) => Err(format!("Failed to export tool capabilities: {}", e)),
+    }
 }

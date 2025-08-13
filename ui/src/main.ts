@@ -97,7 +97,20 @@ interface ChatMessage {
 }
 
 // --- System Instruction (matches backend) ---
-const SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with \"**\". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.`;
+const BASE_SYSTEM_INSTRUCTION: string = `You are a helpful assistant that provides accurate, factual answers. If you do not know the answer, make your best guess. You are casual in tone and prefer concise responses. Avoid starting responses with "**". You prefer bulleted lists when needed but never use nested lists/sub-bullets. Use markdown for code blocks and links. For math: use $$....$$ for display equations (full-line) and \\(...\\) for inline math. Never mix $ and $$ syntax.
+
+IMPORTANT: You have access to research tools that can help answer questions requiring current information or specialized knowledge:
+- Wikipedia Research: For factual information and background context
+- Weather Lookup: For current weather conditions
+- Financial Data: For stock market and financial information
+- ArXiv Research: For academic papers and scientific research
+
+When you need external information to properly answer a question, you can request tool usage by responding with a JSON object in this format:
+{"tools": [{"tool_type": "WIKIPEDIA_LOOKUP", "query": "search term", "reasoning": "why needed", "priority": 1}], "reasoning": "explanation"}
+
+Available tool types: WIKIPEDIA_LOOKUP, WEATHER_LOOKUP, FINANCIAL_DATA, ARXIV_LOOKUP`;
+
+let SYSTEM_INSTRUCTION: string = BASE_SYSTEM_INSTRUCTION;
 
 // --- Constants for History Management ---
 const MAX_HISTORY_WORD_COUNT = 50000; // ADDED
@@ -134,9 +147,18 @@ let chatBackup: ChatBackup | null = null;
 let canUndo: boolean = false;
 
 // Map to track message divs per response counter
-const responseDivMap = new Map<
-  number,
-  { messageDiv: HTMLDivElement; contentDiv: HTMLDivElement }
+const responseDivMap = new Map<number, { messageDiv: HTMLElement; contentDiv: HTMLElement }>();
+
+// Track multiple concurrent tool operations
+const activeToolOperations = new Map<
+  string,
+  {
+    toolType: string;
+    query: string;
+    statusContainer?: HTMLElement;
+    accordionContainer?: HTMLElement;
+    responseId: number;
+  }
 >();
 
 // --- Helper function to preprocess LaTeX delimiters ---
@@ -337,7 +359,287 @@ async function loadInitialSettings() {
   }
 }
 
+// MCP Tool Reasoning Integration
+let mcpToolGuidance: any = null;
+let mcpEnabled = false;
+
+async function loadMcpToolGuidance() {
+  try {
+    const guidanceJson = await invoke<string>("get_tool_reasoning_guidance");
+    mcpToolGuidance = JSON.parse(guidanceJson);
+
+    // Don't change global system instruction - backend will handle MCP guidance when tools are used
+    mcpEnabled = true;
+    updateMcpStatusIndicator(true);
+    console.log("MCP tool reasoning guidance loaded successfully");
+  } catch (error) {
+    console.warn("Failed to load MCP tool reasoning guidance:", error);
+    mcpEnabled = false;
+    updateMcpStatusIndicator(false);
+  }
+}
+
+// Load MCP guidance only when tools are detected in use
+async function enableMcpGuidanceIfNeeded() {
+  if (!mcpEnabled) {
+    await loadMcpToolGuidance();
+  }
+}
+
+// Ensure global system instruction is always the base version
+SYSTEM_INSTRUCTION = BASE_SYSTEM_INSTRUCTION;
+
+function updateMcpStatusIndicator(enabled: boolean) {
+  // Add or update MCP status indicator in the UI
+  let mcpStatus = document.getElementById("mcp-status");
+  if (!mcpStatus) {
+    mcpStatus = document.createElement("div");
+    mcpStatus.id = "mcp-status";
+    mcpStatus.style.cssText = `
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      z-index: 1000;
+      transition: opacity 0.3s ease;
+    `;
+    document.body.appendChild(mcpStatus);
+  }
+
+  if (enabled) {
+    mcpStatus.textContent = "🧠 MCP Tool Reasoning";
+    mcpStatus.style.backgroundColor = "#22c55e";
+    mcpStatus.style.color = "white";
+    mcpStatus.title =
+      "Model Context Protocol tool reasoning is active - AI will make better tool choices";
+  } else {
+    mcpStatus.textContent = "⚠️ Basic Mode";
+    mcpStatus.style.backgroundColor = "#f59e0b";
+    mcpStatus.style.color = "white";
+    mcpStatus.title = "MCP tool reasoning unavailable - using basic tool selection";
+  }
+}
+
+// TODO: Uncomment when this function is needed
+// async function exportToolCapabilities() {
+//   try {
+//     const capabilities = await invoke<string>("export_tool_capabilities");
+//     console.log("Tool capabilities exported:", capabilities);
+//     return capabilities;
+//   } catch (error) {
+//     console.error("Failed to export tool capabilities:", error);
+//     return null;
+//   }
+// }
+
+function getToolReasoningHints(query: string): string {
+  if (!mcpEnabled || !mcpToolGuidance) {
+    return "";
+  }
+
+  const hints: string[] = [];
+  const toolSuggestions: string[] = [];
+  const lowerQuery = query.toLowerCase();
+
+  // Detect tool categories
+  const hasWeather =
+    lowerQuery.includes("weather") ||
+    lowerQuery.includes("temperature") ||
+    lowerQuery.includes("forecast") ||
+    lowerQuery.includes("climate");
+  const hasFinancial =
+    lowerQuery.includes("stock") ||
+    lowerQuery.includes("market") ||
+    lowerQuery.includes("financial") ||
+    lowerQuery.includes("price") ||
+    lowerQuery.includes("investment") ||
+    lowerQuery.includes("trading");
+  const hasResearch =
+    lowerQuery.includes("research") ||
+    lowerQuery.includes("paper") ||
+    lowerQuery.includes("study") ||
+    lowerQuery.includes("academic") ||
+    lowerQuery.includes("scientific") ||
+    lowerQuery.includes("arxiv");
+  const hasVisual =
+    lowerQuery.includes("image") ||
+    lowerQuery.includes("text") ||
+    lowerQuery.includes("document") ||
+    lowerQuery.includes("screenshot") ||
+    lowerQuery.includes("pdf") ||
+    lowerQuery.includes("ocr");
+  const hasGeneral =
+    lowerQuery.includes("who is") ||
+    lowerQuery.includes("what is") ||
+    lowerQuery.includes("history") ||
+    lowerQuery.includes("biography") ||
+    lowerQuery.includes("definition") ||
+    lowerQuery.includes("about");
+
+  // Company/business analysis patterns
+  const hasCompanyQuery =
+    /\b(tesla|apple|google|microsoft|amazon|meta|netflix|uber|spotify|nvidia|intel|amd)\b/i.test(
+      query,
+    ) ||
+    lowerQuery.includes("company") ||
+    lowerQuery.includes("business") ||
+    lowerQuery.includes("corporation");
+
+  // Travel/location patterns
+  const hasTravelQuery =
+    lowerQuery.includes("travel") ||
+    lowerQuery.includes("trip") ||
+    lowerQuery.includes("visit") ||
+    lowerQuery.includes("vacation") ||
+    /\b(tokyo|london|paris|new york|san francisco|beijing|sydney|berlin)\b/i.test(query);
+
+  // Technology analysis patterns
+  const hasTechQuery =
+    lowerQuery.includes("technology") ||
+    lowerQuery.includes("ai") ||
+    lowerQuery.includes("machine learning") ||
+    lowerQuery.includes("blockchain") ||
+    lowerQuery.includes("quantum") ||
+    lowerQuery.includes("neural network");
+
+  // Individual tool suggestions
+  if (hasWeather) {
+    toolSuggestions.push("🌤️ WEATHER_LOOKUP for current conditions");
+  }
+  if (hasFinancial) {
+    toolSuggestions.push("📈 FINANCIAL_DATA for market metrics");
+  }
+  if (hasResearch) {
+    toolSuggestions.push("📚 ARXIV_LOOKUP for latest research papers");
+  }
+  if (hasVisual) {
+    toolSuggestions.push("📄 OCR_CAPTURE for document processing");
+  }
+  if (hasGeneral || hasTechQuery) {
+    toolSuggestions.push("📖 WIKIPEDIA_LOOKUP for comprehensive background");
+  }
+
+  // Multi-tool strategy suggestions
+  if (hasCompanyQuery && hasFinancial) {
+    hints.push(
+      "🏢 COMPANY ANALYSIS STRATEGY: Financial data → Company background → Recent developments",
+    );
+    hints.push("   Priority 1: FINANCIAL_DATA for current performance");
+    hints.push("   Priority 2: WIKIPEDIA_LOOKUP for company context");
+    hints.push("   Priority 3: ARXIV_LOOKUP for R&D insights (if tech company)");
+  } else if (hasTravelQuery && hasWeather) {
+    hints.push("✈️ TRAVEL PLANNING STRATEGY: Current conditions → Destination research");
+    hints.push("   Priority 1: WEATHER_LOOKUP for immediate planning");
+    hints.push("   Priority 2: WIKIPEDIA_LOOKUP for cultural context");
+  } else if (hasTechQuery && hasResearch) {
+    hints.push("🔬 TECHNOLOGY RESEARCH STRATEGY: Foundational knowledge → Cutting-edge research");
+    hints.push("   Priority 1: WIKIPEDIA_LOOKUP for core concepts");
+    hints.push("   Priority 2: ARXIV_LOOKUP for latest developments");
+    hints.push("   Priority 3: FINANCIAL_DATA for market impact (if applicable)");
+  } else if (toolSuggestions.length > 1) {
+    hints.push("🔄 MULTI-TOOL APPROACH DETECTED:");
+    hints.push("   Sequential execution recommended for comprehensive analysis");
+    toolSuggestions.forEach((tool, index) => {
+      hints.push(`   Priority ${index + 1}: ${tool}`);
+    });
+  } else if (toolSuggestions.length === 1) {
+    hints.push(`🎯 SINGLE TOOL STRATEGY: ${toolSuggestions[0]}`);
+  } else {
+    hints.push(
+      "🔍 EXPLORATORY STRATEGY: Start with Wikipedia for context, then adapt based on findings",
+    );
+  }
+
+  // Add iterative research hint for complex queries
+  if (toolSuggestions.length > 2 || (hasTechQuery && hasCompanyQuery)) {
+    hints.push(
+      "🔄 Consider iterative research: Use initial results to refine subsequent tool selections",
+    );
+  }
+
+  return hints.length > 0 ? `\n\n[MCP Multi-Tool Strategy]\n${hints.join("\n")}\n` : "";
+}
+
 // --- ADDED: Function to adjust layout based on input area height ---
+/**
+ * Sanitizes tool titles by removing MCP reasoning details and truncating to 50 characters max.
+ *
+ * This function ensures that tool titles displayed in accordions and status messages are:
+ * - Clean of MCP reasoning details (text in parentheses/brackets)
+ * - Free of reasoning phrases like "reasoning:", "analysis:", etc.
+ * - Limited to 50 characters for better UI display
+ * - Properly trimmed of whitespace
+ *
+ * @param title - The original tool title that may contain MCP reasoning details
+ * @returns A cleaned and truncated title suitable for UI display
+ *
+ * @example
+ * sanitizeToolTitle('Wikipedia Results: "quantum computing (MCP reasoning: background research strategy)"')
+ * // Returns: 'Wikipedia Results: "quantum computing"'
+ *
+ * @example
+ * sanitizeToolTitle('ArXiv Results for: "machine learning algorithms [analysis guidance included]"')
+ * // Returns: 'ArXiv Results for: "machine learning algo..."'
+ */
+function sanitizeToolTitle(title: string): string {
+  // Remove any MCP reasoning details (text in parentheses or brackets)
+  let cleaned = title.replace(/\s*[\(\[].*?[\)\]]\s*/g, "");
+
+  // Remove common MCP reasoning phrases
+  cleaned = cleaned.replace(/\s*(reasoning|analysis|guidance|strategy|approach)[:.].*$/i, "");
+
+  // Truncate to 50 characters max
+  if (cleaned.length > 50) {
+    cleaned = cleaned.substring(0, 47) + "...";
+  }
+
+  return cleaned.trim();
+}
+
+// Test the sanitizeToolTitle function (commented out to avoid TS unused function warning)
+// Uncomment for debugging purposes
+// function testSanitizeToolTitle() {
+//   const testCases = [
+//     {
+//       input: 'Wikipedia Results: "quantum computing (MCP reasoning: background research strategy)"',
+//       expected: 'Wikipedia Results: "quantum computing"',
+//     },
+//     {
+//       input: 'ArXiv Results for: "machine learning algorithms [analysis guidance included]"',
+//       expected: 'ArXiv Results for: "machine learning algo..."',
+//     },
+//     {
+//       input:
+//         'Weather Information for: "San Francisco, CA reasoning: location-based query detected"',
+//       expected: 'Weather Information for: "San Francisco, CA"',
+//     },
+//     {
+//       input: 'Financial Data for: "TSLA approach: market analysis with fundamental data"',
+//       expected: 'Financial Data for: "TSLA"',
+//     },
+//     {
+//       input: "Short title",
+//       expected: "Short title",
+//     },
+//   ];
+//
+//   console.log("Testing sanitizeToolTitle function:");
+//   testCases.forEach((testCase, index) => {
+//     const result = sanitizeToolTitle(testCase.input);
+//     const passed = result === testCase.expected;
+//     console.log(`Test ${index + 1}: ${passed ? "PASS" : "FAIL"}`);
+//     console.log(`  Input: "${testCase.input}"`);
+//     console.log(`  Expected: "${testCase.expected}"`);
+//     console.log(`  Got: "${result}"`);
+//     if (!passed) {
+//       console.warn(`  ❌ Test ${index + 1} failed`);
+//     }
+//   });
+// }
+
 function updateInputAreaLayout() {
   const inputArea = document.getElementById("input-area");
   const chatHistoryEl = document.getElementById("chat-history");
@@ -935,9 +1237,22 @@ async function handleSendMessage() {
     return;
   }
 
+  // Add tool reasoning hints to the user message
+  const toolHints = getToolReasoningHints(userTypedText);
+  const enhancedUserMessage = userTypedText + toolHints;
+
   addMessageToHistory("You", textToDisplay, null, tempOcrTextForAccordion, imagePayloadForMessage);
 
+  // Create enhanced messages with tool reasoning guidance
   const messagesToSendToBackend = [...chatMessageHistory];
+
+  // Update the last user message to include tool hints for the AI
+  if (messagesToSendToBackend.length > 0) {
+    const lastMessage = messagesToSendToBackend[messagesToSendToBackend.length - 1];
+    if (lastMessage.role === "user") {
+      lastMessage.content = enhancedUserMessage;
+    }
+  }
 
   await clearInlineImageAndData();
   messageInput.innerHTML = "";
@@ -1230,8 +1545,23 @@ let unlistenWeatherLookupStarted: (() => void) | null = null;
 let unlistenWeatherLookupCompleted: (() => void) | null = null;
 let unlistenFinancialDataStarted: (() => void) | null = null;
 let unlistenFinancialDataCompleted: (() => void) | null = null;
-let unlistenArxivLookupStarted: (() => void) | null = null; // ADDED
-let unlistenArxivLookupCompleted: (() => void) | null = null; // ADDED
+let unlistenArxivLookupStarted: (() => void) | null = null;
+let unlistenArxivLookupCompleted: (() => void) | null = null;
+
+// Generate unique tool operation IDs
+function generateToolOperationId(toolType: string, query: string): string {
+  return `${toolType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${query.slice(0, 20)}`;
+}
+
+// Clean up completed tool operations
+function cleanupToolOperation(operationId: string) {
+  activeToolOperations.delete(operationId);
+}
+
+// Get current response container for tool operations
+function getCurrentResponseContainer(): HTMLElement | null {
+  return responseDivMap.get(responseCounter)?.contentDiv || null;
+}
 
 // Buffer and flag for batched animation of stream chunks
 let streamDeltaBuffer = "";
@@ -1529,44 +1859,37 @@ async function setupStreamListeners() {
   if (unlistenArticleLookupStarted) unlistenArticleLookupStarted();
   unlistenArticleLookupStarted = await listen<ArticleLookupStartedPayload>(
     "ARTICLE_LOOKUP_STARTED",
-    (event) => {
+    async (event) => {
+      await enableMcpGuidanceIfNeeded();
       console.log("ARTICLE_LOOKUP_STARTED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      const currentResponseContentDiv = getCurrentResponseContainer();
       if (currentResponseContentDiv) {
-        // Remove any previous article lookup status ONLY
-        const existingStatus = currentResponseContentDiv.querySelector(
-          ".article-lookup-status-container",
-        );
-        if (existingStatus) {
-          existingStatus.remove();
-        }
-        // Also remove general streaming dots if they are the only thing
-        const existingDots = currentResponseContentDiv.querySelector(".streaming-dots");
-        if (
-          existingDots &&
-          currentResponseContentDiv.children.length === 1 &&
-          currentResponseContentDiv.firstChild === existingDots
-        ) {
-          existingDots.remove();
-        }
+        const operationId = generateToolOperationId("WIKIPEDIA", event.payload.query);
 
         const lookupStatusDiv = document.createElement("div");
         lookupStatusDiv.classList.add("article-lookup-status-container");
+        lookupStatusDiv.setAttribute("data-operation-id", operationId);
 
         const globeIcon = createGlobeIcon();
         globeIcon.classList.add("spinning-globe");
         lookupStatusDiv.appendChild(globeIcon);
 
         const statusText = document.createElement("span");
-        statusText.textContent = `Looking up article for: "${event.payload.query}"...`;
+        statusText.textContent = sanitizeToolTitle(
+          `Looking up article for: "${event.payload.query}"...`,
+        );
         statusText.classList.add("article-lookup-status-text");
         lookupStatusDiv.appendChild(statusText);
 
-        currentResponseContentDiv.insertBefore(
-          lookupStatusDiv,
-          currentResponseContentDiv.firstChild,
-        );
-        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        currentResponseContentDiv.appendChild(lookupStatusDiv);
+
+        // Track this operation
+        activeToolOperations.set(operationId, {
+          toolType: "WIKIPEDIA",
+          query: event.payload.query,
+          statusContainer: lookupStatusDiv,
+          responseId: responseCounter,
+        });
       }
     },
   );
@@ -1576,18 +1899,27 @@ async function setupStreamListeners() {
     "ARTICLE_LOOKUP_COMPLETED",
     (event) => {
       console.log("ARTICLE_LOOKUP_COMPLETED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
-      if (currentResponseContentDiv) {
-        const searchingStatusContainer = currentResponseContentDiv.querySelector(
-          ".article-lookup-status-container",
-        );
-        if (searchingStatusContainer) {
-          searchingStatusContainer.remove();
+
+      // Find the specific operation for this query
+      let operationId: string | null = null;
+      for (const [id, operation] of activeToolOperations.entries()) {
+        if (operation.toolType === "WIKIPEDIA" && operation.query === event.payload.query) {
+          operationId = id;
+          break;
         }
+      }
+
+      const currentResponseContentDiv = getCurrentResponseContainer();
+      if (currentResponseContentDiv && operationId) {
+        // Remove the specific status container for this operation
+        const statusContainer = currentResponseContentDiv.querySelector(
+          `.article-lookup-status-container[data-operation-id="${operationId}"]`,
+        );
+        if (statusContainer) statusContainer.remove();
 
         if (event.payload.success && event.payload.summary) {
           const { accordion, toggle, content } = createCustomAccordion(
-            `Wikipedia Results: "${event.payload.query}"`,
+            sanitizeToolTitle(`Wikipedia Results: "${event.payload.query}"`),
             "web-search",
           );
 
@@ -1681,42 +2013,37 @@ async function setupStreamListeners() {
   if (unlistenFinancialDataStarted) unlistenFinancialDataStarted();
   unlistenFinancialDataStarted = await listen<FinancialDataStartedPayload>(
     "FINANCIAL_DATA_STARTED",
-    (event) => {
+    async (event) => {
+      await enableMcpGuidanceIfNeeded();
       console.log("FINANCIAL_DATA_STARTED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      const currentResponseContentDiv = getCurrentResponseContainer();
       if (currentResponseContentDiv) {
-        // Remove any previous financial data status ONLY
-        const existingStatus = currentResponseContentDiv.querySelector(
-          ".financial-data-status-container",
-        );
-        if (existingStatus) {
-          existingStatus.remove();
-        }
-        // Also remove general streaming dots if they are the only thing
-        const existingDots = currentResponseContentDiv.querySelector(".streaming-dots");
-        if (
-          existingDots &&
-          currentResponseContentDiv.children.length === 1 &&
-          currentResponseContentDiv.firstChild === existingDots
-        ) {
-          existingDots.remove();
-        }
+        const operationId = generateToolOperationId("FINANCIAL", event.payload.symbol);
 
         const statusDiv = document.createElement("div");
         statusDiv.classList.add("financial-data-status-container");
+        statusDiv.setAttribute("data-operation-id", operationId);
 
-        const globeIcon = createFinancialIcon(); // Using globe, update if you have a specific financial icon
-        globeIcon.classList.add("spinning-globe");
-        statusDiv.appendChild(globeIcon);
+        const financialIcon = createFinancialIcon();
+        financialIcon.classList.add("spinning-globe");
+        statusDiv.appendChild(financialIcon);
 
         const statusText = document.createElement("span");
-        statusText.textContent = `Fetching financial data for: "${event.payload.symbol}"...`;
+        statusText.textContent = sanitizeToolTitle(
+          `Fetching financial data for: "${event.payload.symbol}"...`,
+        );
         statusText.classList.add("financial-data-status-text");
         statusDiv.appendChild(statusText);
 
-        // Prepend the new status
-        currentResponseContentDiv.insertBefore(statusDiv, currentResponseContentDiv.firstChild);
-        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        currentResponseContentDiv.appendChild(statusDiv);
+
+        // Track this operation
+        activeToolOperations.set(operationId, {
+          toolType: "FINANCIAL",
+          query: event.payload.symbol,
+          statusContainer: statusDiv,
+          responseId: responseCounter,
+        });
       }
     },
   );
@@ -1726,17 +2053,28 @@ async function setupStreamListeners() {
     "FINANCIAL_DATA_COMPLETED",
     (event) => {
       console.log("FINANCIAL_DATA_COMPLETED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
-      if (currentResponseContentDiv) {
+
+      // Find the specific operation for this symbol
+      let operationId: string | null = null;
+      for (const [id, operation] of activeToolOperations.entries()) {
+        if (operation.toolType === "FINANCIAL" && operation.query === event.payload.symbol) {
+          operationId = id;
+          break;
+        }
+      }
+
+      const currentResponseContentDiv = getCurrentResponseContainer();
+      if (currentResponseContentDiv && operationId) {
+        // Remove the specific status container for this operation
         const fetchingStatusContainer = currentResponseContentDiv.querySelector(
-          ".financial-data-status-container",
+          `.financial-data-status-container[data-operation-id="${operationId}"]`,
         );
         if (fetchingStatusContainer) {
           fetchingStatusContainer.remove();
         }
 
         const { accordion, toggle, content } = createCustomAccordion(
-          `Financial Data for: "${event.payload.symbol}"`,
+          sanitizeToolTitle(`Financial Data for: "${event.payload.symbol}"`),
           "web-search",
         );
 
@@ -1759,13 +2097,19 @@ async function setupStreamListeners() {
 
           if (event.payload.error) {
             console.error("Financial data lookup error:", event.payload.error);
-            errorParagraph.textContent = `Financial data lookup for "${event.payload.symbol}" failed: ${event.payload.error}.`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `Financial data lookup for "${event.payload.symbol}" failed: ${event.payload.error}.`,
+            );
           } else if (event.payload.success && !event.payload.data && event.payload.symbol) {
             // Success, but no specific financial data
-            errorParagraph.textContent = `No specific financial data found for "${event.payload.symbol}".`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `No specific financial data found for "${event.payload.symbol}".`,
+            );
           } else {
             // General fallback
-            errorParagraph.textContent = `An unexpected issue occurred while fetching financial data for "${event.payload.symbol}".`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `An unexpected issue occurred while fetching financial data for "${event.payload.symbol}".`,
+            );
           }
           financialContentDiv.appendChild(errorParagraph);
 
@@ -1780,20 +2124,10 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentResponseContentDiv.insertBefore(accordion, currentResponseContentDiv.firstChild);
+        currentResponseContentDiv.appendChild(accordion);
 
-        // Ensure streaming dots are present if no other content is being streamed by the LLM yet
-        if (
-          !currentResponseContentDiv.querySelector(".streaming-dots") &&
-          (currentResponseContentDiv.innerHTML === "" || // Empty
-            (currentResponseContentDiv.children.length > 0 && // Only has accordions/tool messages
-              currentResponseContentDiv.querySelectorAll(
-                ":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)",
-              ).length === 0))
-        ) {
-          currentResponseContentDiv.appendChild(getStreamingDots());
-        }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        cleanupToolOperation(operationId);
       }
     },
   );
@@ -1836,19 +2170,23 @@ async function setupStreamListeners() {
 
       // Guard the DOM operations specifically
       if (responseContentDiv) {
-        // First, save any accordions that might be present
-        const accordions: { element: HTMLElement; type: string }[] = [];
-        responseContentDiv.querySelectorAll(".web-search-accordion").forEach((accordionNode) => {
-          const accordionElement = accordionNode as HTMLElement;
-          let type = "article";
-          if (accordionElement.querySelector(".weather-info-text")) type = "weather";
-          else if (accordionElement.querySelector(".financial-data-text")) type = "financial";
-          else if (accordionElement.querySelector(".arxiv-paper-summary")) type = "arxiv"; // ADDED for ArXiv
-          accordions.push({
-            element: accordionElement,
-            type: type,
+        // Save ALL accordions before clearing content (preserves multiple tool calls of same type)
+        // This ensures that when multiple Wikipedia/Weather/Financial/ArXiv calls happen,
+        // all their accordions are preserved instead of just the most recent one
+        const accordions: HTMLElement[] = [];
+        const accordionSelectors = [
+          ".web-search-accordion",
+          ".reasoning-accordion",
+          ".ocr-accordion",
+          ".image-preview-accordion",
+        ];
+
+        accordionSelectors.forEach((selector) => {
+          responseContentDiv.querySelectorAll(selector).forEach((accordionNode) => {
+            const accordionElement = accordionNode as HTMLElement;
+            accordions.push(accordionElement);
+            accordionElement.remove();
           });
-          accordionElement.remove();
         });
 
         // Clear the entire content div to remove any animated spans and streaming dots
@@ -1876,16 +2214,26 @@ async function setupStreamListeners() {
 
         // And again before inserting DOM elements
         if (responseContentDiv) {
-          const order = ["article", "weather", "financial", "arxiv"]; // ADDED "arxiv" to order
-          order.forEach((type) => {
-            const accordionToPrepend = accordions.find((a) => a.type === type);
-            if (accordionToPrepend && responseContentDiv) {
-              responseContentDiv.insertBefore(
-                accordionToPrepend.element,
-                responseContentDiv.firstChild,
-              );
-            }
-          });
+          // Re-insert accordions in proper order: tool accordions first, then other types
+          const toolAccordions = accordions.filter((el) =>
+            el.classList.contains("web-search-accordion"),
+          );
+          const reasoningAccordions = accordions.filter((el) =>
+            el.classList.contains("reasoning-accordion"),
+          );
+          const ocrAccordions = accordions.filter((el) => el.classList.contains("ocr-accordion"));
+          const imageAccordions = accordions.filter((el) =>
+            el.classList.contains("image-preview-accordion"),
+          );
+
+          // Insert in reverse order since we're using insertBefore with firstChild
+          [...imageAccordions, ...ocrAccordions, ...reasoningAccordions, ...toolAccordions]
+            .reverse()
+            .forEach((accordionElement) => {
+              if (responseContentDiv) {
+                responseContentDiv.insertBefore(accordionElement, responseContentDiv.firstChild);
+              }
+            });
         }
       }
 
@@ -2052,45 +2400,37 @@ async function setupStreamListeners() {
   if (unlistenWeatherLookupStarted) unlistenWeatherLookupStarted();
   unlistenWeatherLookupStarted = await listen<WeatherLookupStartedPayload>(
     "WEATHER_LOOKUP_STARTED",
-    (event) => {
+    async (event) => {
+      await enableMcpGuidanceIfNeeded();
       console.log("WEATHER_LOOKUP_STARTED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
+      const currentResponseContentDiv = getCurrentResponseContainer();
       if (currentResponseContentDiv) {
-        const existingStatus = currentResponseContentDiv.querySelector(
-          ".weather-lookup-status-container",
-        );
-        if (existingStatus) existingStatus.remove();
-
-        const existingDots = currentAssistantContentDiv?.querySelector(".streaming-dots");
-        if (
-          currentAssistantContentDiv &&
-          currentAssistantContentDiv.querySelector(".streaming-dots") &&
-          currentAssistantContentDiv.children.length === 1 &&
-          currentAssistantContentDiv.firstChild === existingDots
-        ) {
-          const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
-          existingDots?.remove();
-        }
+        const operationId = generateToolOperationId("WEATHER", event.payload.location);
 
         const lookupStatusDiv = document.createElement("div");
         lookupStatusDiv.classList.add("weather-lookup-status-container");
+        lookupStatusDiv.setAttribute("data-operation-id", operationId);
 
         const weatherIcon = createThermometerIcon();
-        weatherIcon.classList.add("spinning-icon"); // Apply the generic spinning class
+        weatherIcon.classList.add("spinning-icon");
         lookupStatusDiv.appendChild(weatherIcon);
 
         const statusText = document.createElement("span");
-        statusText.textContent = `Fetching weather for: "${event.payload.location}"...`;
+        statusText.textContent = sanitizeToolTitle(
+          `Looking up weather for: "${event.payload.location}"...`,
+        );
         statusText.classList.add("weather-lookup-status-text");
         lookupStatusDiv.appendChild(statusText);
 
-        if (currentAssistantContentDiv) {
-          currentAssistantContentDiv.insertBefore(
-            lookupStatusDiv,
-            currentAssistantContentDiv.firstChild,
-          );
-        }
-        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        currentResponseContentDiv.appendChild(lookupStatusDiv);
+
+        // Track this operation
+        activeToolOperations.set(operationId, {
+          toolType: "WEATHER",
+          query: event.payload.location,
+          statusContainer: lookupStatusDiv,
+          responseId: responseCounter,
+        });
       }
     },
   );
@@ -2100,19 +2440,30 @@ async function setupStreamListeners() {
     "WEATHER_LOOKUP_COMPLETED",
     (event) => {
       console.log("WEATHER_LOOKUP_COMPLETED received:", event.payload);
-      const currentResponseContentDiv = responseDivMap.get(responseCounter)?.contentDiv;
-      if (currentResponseContentDiv) {
+
+      // Find the specific operation for this location
+      let operationId: string | null = null;
+      for (const [id, operation] of activeToolOperations.entries()) {
+        if (operation.toolType === "WEATHER" && operation.query === event.payload.location) {
+          operationId = id;
+          break;
+        }
+      }
+
+      const currentResponseContentDiv = getCurrentResponseContainer();
+      if (currentResponseContentDiv && operationId) {
+        // Remove the specific status container for this operation
         const statusContainer = currentResponseContentDiv.querySelector(
-          ".weather-lookup-status-container",
+          `.weather-lookup-status-container[data-operation-id="${operationId}"]`,
         );
         if (statusContainer) statusContainer.remove();
 
         const { accordion, toggle, content } = createCustomAccordion(
-          `Weather Information for: "${event.payload.location}"`,
+          sanitizeToolTitle(`Weather Information for: "${event.payload.location}"`),
           "web-search",
         );
 
-        const weatherIcon = createThermometerIcon(); // Static icon for summary
+        const weatherIcon = createThermometerIcon();
         addIconToToggle(toggle, weatherIcon);
 
         const weatherContentDiv = content;
@@ -2141,17 +2492,23 @@ async function setupStreamListeners() {
 
           if (event.payload.error) {
             console.error("Weather lookup failed:", event.payload.error);
-            errorParagraph.textContent = `Weather lookup for "${event.payload.location}" failed: ${event.payload.error}`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `Weather lookup for "${event.payload.location}" failed: ${event.payload.error}`,
+            );
           } else if (
             event.payload.success &&
             (event.payload.temperature === null || event.payload.temperature === undefined) &&
             event.payload.location
           ) {
             // Success, but no specific temperature data
-            errorParagraph.textContent = `Could not retrieve weather data for "${event.payload.location}".`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `Could not retrieve weather data for "${event.payload.location}".`,
+            );
           } else {
             // General fallback, should ideally not be reached if payload structure is consistent
-            errorParagraph.textContent = `An unexpected issue occurred while fetching weather for "${event.payload.location}".`;
+            errorParagraph.textContent = sanitizeToolTitle(
+              `An unexpected issue occurred while fetching weather for "${event.payload.location}".`,
+            );
           }
           weatherContentDiv.appendChild(errorParagraph);
 
@@ -2191,40 +2548,37 @@ async function setupStreamListeners() {
   if (unlistenArxivLookupStarted) unlistenArxivLookupStarted();
   unlistenArxivLookupStarted = await listen<ArxivLookupStartedPayload>(
     "ARXIV_LOOKUP_STARTED",
-    (event) => {
+    async (event) => {
+      await enableMcpGuidanceIfNeeded();
       console.log("ARXIV_LOOKUP_STARTED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const existingStatus = currentAssistantContentDiv.querySelector(
-          ".arxiv-lookup-status-container",
-        );
-        if (existingStatus) existingStatus.remove();
-
-        const existingDots = currentAssistantContentDiv.querySelector(".streaming-dots");
-        if (
-          existingDots &&
-          currentAssistantContentDiv.children.length === 1 &&
-          currentAssistantContentDiv.firstChild === existingDots
-        ) {
-          existingDots.remove();
-        }
+      const currentResponseContentDiv = getCurrentResponseContainer();
+      if (currentResponseContentDiv) {
+        const operationId = generateToolOperationId("ARXIV", event.payload.query);
 
         const lookupStatusDiv = document.createElement("div");
-        lookupStatusDiv.classList.add("arxiv-lookup-status-container"); // New class
+        lookupStatusDiv.classList.add("arxiv-lookup-status-container");
+        lookupStatusDiv.setAttribute("data-operation-id", operationId);
 
         const arxivIconElement = createArxivIcon();
         arxivIconElement.classList.add("spinning-icon");
         lookupStatusDiv.appendChild(arxivIconElement);
 
         const statusText = document.createElement("span");
-        statusText.textContent = `Fetching papers from ArXiv for: "${event.payload.query}"...`;
-        statusText.classList.add("arxiv-lookup-status-text"); // New class
+        statusText.textContent = sanitizeToolTitle(
+          `Searching ArXiv for: "${event.payload.query}"...`,
+        );
+        statusText.classList.add("arxiv-lookup-status-text");
         lookupStatusDiv.appendChild(statusText);
 
-        currentAssistantContentDiv.insertBefore(
-          lookupStatusDiv,
-          currentAssistantContentDiv.firstChild,
-        );
-        if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        currentResponseContentDiv.appendChild(lookupStatusDiv);
+
+        // Track this operation
+        activeToolOperations.set(operationId, {
+          toolType: "ARXIV",
+          query: event.payload.query,
+          statusContainer: lookupStatusDiv,
+          responseId: responseCounter,
+        });
       }
     },
   );
@@ -2234,14 +2588,26 @@ async function setupStreamListeners() {
     "ARXIV_LOOKUP_COMPLETED",
     (event) => {
       console.log("ARXIV_LOOKUP_COMPLETED received:", event.payload);
-      if (currentAssistantContentDiv) {
-        const statusContainer = currentAssistantContentDiv.querySelector(
-          ".arxiv-lookup-status-container",
+
+      // Find the specific operation for this query
+      let operationId: string | null = null;
+      for (const [id, operation] of activeToolOperations.entries()) {
+        if (operation.toolType === "ARXIV" && operation.query === event.payload.query) {
+          operationId = id;
+          break;
+        }
+      }
+
+      const currentResponseContentDiv = getCurrentResponseContainer();
+      if (currentResponseContentDiv && operationId) {
+        // Remove the specific status container for this operation
+        const statusContainer = currentResponseContentDiv.querySelector(
+          `.arxiv-lookup-status-container[data-operation-id="${operationId}"]`,
         );
         if (statusContainer) statusContainer.remove();
 
         const { accordion, toggle, content } = createCustomAccordion(
-          `ArXiv Results for: "${event.payload.query}"`,
+          sanitizeToolTitle(`ArXiv Results for: "${event.payload.query}"`),
           "arxiv-search", // New type for accordion
         );
 
@@ -2291,9 +2657,13 @@ async function setupStreamListeners() {
           const messageParagraph = document.createElement("p");
           if (event.payload.error) {
             console.error("ArXiv lookup failed:", event.payload.error);
-            messageParagraph.textContent = `ArXiv lookup for "${event.payload.query}" failed: ${event.payload.error}`;
+            messageParagraph.textContent = sanitizeToolTitle(
+              `ArXiv lookup for "${event.payload.query}" failed: ${event.payload.error}`,
+            );
           } else {
-            messageParagraph.textContent = `No ArXiv papers found for "${event.payload.query}".`;
+            messageParagraph.textContent = sanitizeToolTitle(
+              `No ArXiv papers found for "${event.payload.query}".`,
+            );
           }
           arxivContentDiv.appendChild(messageParagraph);
           // Optionally open the accordion if there's an error or no results
@@ -2301,19 +2671,10 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+        currentResponseContentDiv.appendChild(accordion);
 
-        if (
-          !currentAssistantContentDiv.querySelector(".streaming-dots") &&
-          (currentAssistantContentDiv.innerHTML === "" ||
-            (currentAssistantContentDiv.children.length > 0 &&
-              currentAssistantContentDiv.querySelectorAll(
-                ":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)",
-              ).length === 0))
-        ) {
-          currentAssistantContentDiv.appendChild(getStreamingDots());
-        }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+        cleanupToolOperation(operationId);
       }
     },
   );
@@ -2332,6 +2693,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await setInitialWindowGeometry(); // Set fixed window size and position
   updateInputAreaLayout(); // ADDED: Initial layout setup
   updatePlaceholderState(); // ADDED: Initial placeholder check
+  // testSanitizeToolTitle(); // ADDED: Test tool title sanitization (uncomment for debugging)
 
   // --- Click-Through Logic ---
   // Ensure the window is interactive when it gains focus

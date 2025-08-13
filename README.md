@@ -14,11 +14,23 @@ A Tauri application for easy interaction with AI models.
 *   Background Panel Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt
 *   Reasoning Data for R1 & Reasoning Summaries for Gemini
+*   **MCP Tool Reasoning Integration** - AI models make smarter tool choices
 *   Financial Data from Yahoo Finance
 *   Weather Data from Open-Meteo
 *   General Data from Wikipedia
 *   Wikipedia Research Loop (up to 4 searches)
 *   Research Paper Data from ArXiv
+
+### MCP Tool Reasoning
+
+Shard includes an advanced Model Context Protocol (MCP) integration that enhances AI decision-making for tool usage. The system provides:
+
+*   **Intelligent Tool Selection**: AI models receive structured guidance on when and how to use research tools
+*   **Context-Aware Hints**: Real-time suggestions based on query analysis (weather, financial, academic research, etc.)
+*   **Multi-Tool Research Strategies**: Guidance for combining tools effectively (e.g., Wikipedia for background + ArXiv for latest research)
+*   **Transparent Reasoning**: AI explains its tool selection process to users
+
+See [MCP_INTEGRATION.md](MCP_INTEGRATION.md) for detailed documentation.
 
 Feel free to add more ideas in the Issues or contribute to the project with a PR!
 

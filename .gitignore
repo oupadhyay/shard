@@ -3,3 +3,4 @@
 src-tauri/icons/logo2*
 INTERNAL.md
 MCP_INTEGRATION.md
+node_modules/

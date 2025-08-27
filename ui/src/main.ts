@@ -1464,9 +1464,7 @@ async function handleSendMessage() {
 
   currentAssistantContentDiv = document.createElement("div"); // Create the content div
   currentAssistantContentDiv.classList.add("message-content");
-  // Use the new getStreamingDots() function for the initial indicator
   currentAssistantContentDiv.innerHTML = ""; // Clear any default content
-  currentAssistantContentDiv.appendChild(getStreamingDots());
   assistantMessagePlaceholder.appendChild(currentAssistantContentDiv);
 
   currentAssistantMessageDiv = assistantMessagePlaceholder; // Store reference to the whole message
@@ -1729,6 +1727,32 @@ function cleanupToolOperation(operationId: string) {
 // Get current response container for tool operations
 function getCurrentResponseContainer(): HTMLElement | null {
   return responseDivMap.get(responseCounter)?.contentDiv || null;
+}
+
+// Helper function to insert tool accordions in the correct order
+function insertToolAccordion(container: HTMLElement, accordion: HTMLElement) {
+  // First, check for and temporarily remove streaming dots
+  const streamingDots = container.querySelector('.streaming-dots');
+  if (streamingDots) {
+    streamingDots.remove();
+  }
+
+  // Find the insertion point: after existing tool accordions but before LLM content
+  const existingAccordions = container.querySelectorAll('.web-search-accordion');
+
+  if (existingAccordions.length > 0) {
+    // Insert after the last existing tool accordion
+    const lastAccordion = existingAccordions[existingAccordions.length - 1];
+    const nextElement = lastAccordion.nextElementSibling;
+    if (nextElement) {
+      container.insertBefore(accordion, nextElement);
+    } else {
+      container.appendChild(accordion);
+    }
+  } else {
+    // No existing tool accordions, insert at the beginning
+    container.insertBefore(accordion, container.firstChild);
+  }
 }
 
 // Buffer and flag for batched animation of stream chunks
@@ -2010,7 +2034,6 @@ async function setupStreamListeners() {
           !responseContentDiv.querySelector(".streaming-dots")
         ) {
           // If buffer was empty but there's content and no dots, add dots (e.g. after clearing initial dots)
-          responseContentDiv.appendChild(getStreamingDots());
           if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
         }
       });
@@ -2160,18 +2183,10 @@ async function setupStreamListeners() {
             searchContentDiv.appendChild(summaryDiv);
           }
 
-          currentResponseContentDiv.insertBefore(accordion, currentResponseContentDiv.firstChild);
+          // Insert accordion after any existing tool accordions but before LLM content
+          insertToolAccordion(currentResponseContentDiv, accordion);
         } else if (event.payload.error) {
           console.error("Article lookup failed:", event.payload.error);
-        }
-
-        if (
-          currentResponseContentDiv.innerHTML === "" ||
-          (event.payload.success &&
-            currentResponseContentDiv.children.length === 1 &&
-            currentResponseContentDiv.querySelector(".web-search-accordion"))
-        ) {
-          currentResponseContentDiv.appendChild(getStreamingDots());
         }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
@@ -2292,8 +2307,7 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentResponseContentDiv.appendChild(accordion);
-
+        insertToolAccordion(currentResponseContentDiv, accordion);
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
         cleanupToolOperation(operationId);
       }
@@ -2691,21 +2705,9 @@ async function setupStreamListeners() {
         }
 
         if (currentAssistantContentDiv) {
-          currentAssistantContentDiv.insertBefore(accordion, currentAssistantContentDiv.firstChild);
+          insertToolAccordion(currentAssistantContentDiv, accordion);
         }
 
-        // Ensure streaming dots are present if no other content is being streamed by the LLM yet
-        if (
-          currentAssistantContentDiv &&
-          !currentAssistantContentDiv.querySelector(".streaming-dots") &&
-          (currentAssistantContentDiv.innerHTML === "" || // Empty
-            (currentAssistantContentDiv.children.length > 0 && // Only has accordions/tool messages
-              currentAssistantContentDiv.querySelectorAll(
-                ":not(.streaming-dots):not(.web-search-accordion):not(.tool-error-message):not(.tool-info-message)",
-              ).length === 0))
-        ) {
-          currentAssistantContentDiv.appendChild(getStreamingDots());
-        }
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
       }
     },
@@ -2839,8 +2841,7 @@ async function setupStreamListeners() {
           content.classList.add("open");
         }
 
-        currentResponseContentDiv.appendChild(accordion);
-
+        insertToolAccordion(currentResponseContentDiv, accordion);
         if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
         cleanupToolOperation(operationId);
       }

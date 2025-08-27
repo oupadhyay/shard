@@ -1081,6 +1081,7 @@ async function handleCaptureOcr() {
 
   // Visually indicate loading
   if (ocrIconContainer) ocrIconContainer.style.opacity = "0.5";
+  showImageProcessingIndicator("Capturing and processing screenshot...");
 
   try {
     const result = await core.invoke<CaptureResult>("capture_interactive_and_ocr");
@@ -1208,10 +1209,176 @@ async function handleCaptureOcr() {
       }, 5000);
     }
   } finally {
+    hideImageProcessingIndicator();
     if (ocrIconContainer) ocrIconContainer.style.opacity = "1.0";
     messageInput.focus();
     updateInputAreaLayout();
   }
+}
+
+// --- ADDED: Subtle Loading Functions ---
+
+let originalPlaceholderText = "Type your message...";
+
+function showImageProcessingIndicator(message: string = "Processing image...") {
+  const messageInput = document.getElementById("message-input") as HTMLDivElement;
+  const inputWrapper = messageInput?.closest(".input-wrapper") as HTMLElement;
+
+  if (!messageInput || !inputWrapper) return;
+
+  // Store original placeholder if first time
+  if (!messageInput.dataset.originalPlaceholder) {
+    messageInput.dataset.originalPlaceholder = originalPlaceholderText;
+  }
+
+  // Update placeholder text only if input is empty (placeholder would be visible)
+  const hasContent = messageInput.textContent?.trim() || messageInput.querySelector(".inline-image-wrapper");
+  if (!hasContent) {
+    updatePlaceholderText(message);
+    messageInput.classList.add("loading");
+  }
+
+  // Add small spinner
+  let spinner = inputWrapper.querySelector(".input-loading-indicator") as HTMLElement;
+  if (!spinner) {
+    spinner = document.createElement("div");
+    spinner.className = "input-loading-indicator";
+    inputWrapper.appendChild(spinner);
+  }
+  spinner.classList.add("visible");
+}
+
+function hideImageProcessingIndicator() {
+  const messageInput = document.getElementById("message-input") as HTMLDivElement;
+  const inputWrapper = messageInput?.closest(".input-wrapper") as HTMLElement;
+
+  if (!messageInput || !inputWrapper) return;
+
+  // Restore original placeholder only if loading class was applied
+  if (messageInput.classList.contains("loading")) {
+    const originalPlaceholder = messageInput.dataset.originalPlaceholder || originalPlaceholderText;
+    updatePlaceholderText(originalPlaceholder);
+    messageInput.classList.remove("loading");
+  }
+
+  // Hide spinner
+  const spinner = inputWrapper.querySelector(".input-loading-indicator") as HTMLElement;
+  if (spinner) {
+    spinner.classList.remove("visible");
+  }
+}
+
+function updatePlaceholderText(text: string) {
+  // We need to dynamically update the CSS content property
+  // This is a bit tricky, so we'll use a CSS custom property
+  document.documentElement.style.setProperty('--placeholder-content', `"${text}"`);
+}
+
+
+
+// --- ADDED: Clipboard Image Support ---
+
+
+
+async function handleClipboardImage() {
+  console.log("Processing clipboard image...");
+
+  showImageProcessingIndicator("Processing clipboard image...");
+
+  try {
+    const captureResult: CaptureResult = await core.invoke("process_clipboard_image");
+    console.log("Clipboard image processed:", captureResult);
+    await processImageResult(captureResult, "image/png");
+
+    if (statusMessage) {
+      statusMessage.textContent = "Image pasted from clipboard";
+      statusMessage.style.display = "block";
+      setTimeout(() => {
+        if (statusMessage) {
+          statusMessage.style.display = "none";
+          statusMessage.textContent = "";
+        }
+      }, 3000);
+    }
+  } catch (error) {
+    console.error("Error processing clipboard image:", error);
+    // Don't show alert for clipboard errors - they're common when no image is present
+    console.log("No image found in clipboard or processing failed");
+  } finally {
+    hideImageProcessingIndicator();
+  }
+}
+
+
+
+async function processImageResult(captureResult: CaptureResult, mimeType: string) {
+  if (!captureResult.image_base64) {
+    console.log("No image data in result");
+    return;
+  }
+
+  // Show brief processing indicator
+  showImageProcessingIndicator("Preparing image...");
+
+  // Clear previous capture state before adding new image
+  await clearInlineImageAndData();
+
+  // Set the current image data for the next message
+  currentImageBase64 = captureResult.image_base64;
+  currentImageMimeType = mimeType;
+  currentOcrText = captureResult.ocr_text;
+
+  // Preserve existing text before adding the image
+  const existingText = getTextFromContentEditable(messageInput).trim();
+  messageInput.innerHTML = ""; // Clear the input field to rebuild
+
+  if (existingText) {
+    const textNode = document.createTextNode(existingText + " ");
+    messageInput.appendChild(textNode);
+  }
+
+  // Create inline image structure (reusing existing pattern)
+  const wrapper = document.createElement("span");
+  wrapper.className = "inline-image-wrapper";
+  wrapper.contentEditable = "false";
+
+  const img = document.createElement("img");
+  img.src = `data:${currentImageMimeType};base64,${currentImageBase64}`;
+  img.alt = "Image";
+
+  img.onload = () => {
+    updateInputAreaLayout();
+  };
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.className = "delete-inline-image-btn";
+  deleteBtn.innerHTML = "&times;";
+  deleteBtn.title = "Remove image";
+  deleteBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await clearInlineImageAndData();
+  });
+
+  wrapper.appendChild(img);
+  wrapper.appendChild(deleteBtn);
+  messageInput.appendChild(wrapper);
+
+  // Set cursor after the image
+  const range = document.createRange();
+  const sel = window.getSelection();
+  range.setStartAfter(wrapper);
+  range.collapse(true);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+
+  updatePlaceholderState();
+
+  if (currentOcrText) {
+    messageInput.title = currentOcrText;
+  }
+
+  // Hide processing indicator
+  hideImageProcessingIndicator();
 }
 
 // --- Send Message Handler ---
@@ -2944,6 +3111,39 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (ocrIconContainer) {
     ocrIconContainer.addEventListener("click", handleCaptureOcr);
   }
+
+
+
+  // --- ADDED: Clipboard Paste Event Listener ---
+  document.addEventListener("paste", async (event) => {
+    // Only handle paste events when the message input is focused or when no specific element is focused
+    const activeElement = document.activeElement;
+    if (activeElement !== messageInput && activeElement !== document.body) {
+      return; // Let other elements handle their own paste events
+    }
+
+    const clipboardData = event.clipboardData;
+    if (clipboardData) {
+      // Check for image data first
+      const items = Array.from(clipboardData.items);
+      const imageItem = items.find(item => item.type.startsWith("image/"));
+
+      if (imageItem) {
+        event.preventDefault();
+        console.log("Image pasted from clipboard");
+
+        try {
+          await handleClipboardImage();
+        } catch (error) {
+          console.error("Error handling pasted image:", error);
+        }
+        return;
+      }
+
+      // If no image, let text paste work normally
+      // The contenteditable div will handle text paste automatically
+    }
+  });
 
   // ADDED: Listen for window resize to update layout
   window.addEventListener("resize", updateInputAreaLayout);

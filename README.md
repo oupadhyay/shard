@@ -9,7 +9,7 @@ A Tauri application for easy interaction with AI models.
 *   Chat Interface with Streamed Responses
 *   Free Models (DeepSeek V3, Gemini Flash, DeepSeek R1)
 *   API Key Management (OpenRouter & Google)
-*   Screen Capture + OCR Analysis (Built-in)
+*   Screen Capture + OCR Analysis (Built-in) + Image Copy Paste
 *   Markdown & LaTeX Rendering
 *   Background Panel Mode ([MacOS only](https://developer.apple.com/documentation/appkit/nspanel))
 *   System Prompt

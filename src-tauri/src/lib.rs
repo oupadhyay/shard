@@ -760,6 +760,44 @@ fn ocr_image_buffer(_app_handle: &AppHandle, img_buffer: &DynamicImage) -> Resul
     Ok(text)
 }
 
+// --- ADDED: Helper function to process any image source ---
+fn process_image_with_ocr(
+    app_handle: &AppHandle,
+    image_data: &DynamicImage,
+    source_description: &str,
+) -> Result<CaptureResult, String> {
+    log::info!("Processing {} for OCR and encoding", source_description);
+
+    // Perform OCR
+    let ocr_text = match ocr_image_buffer(app_handle, image_data) {
+        Ok(text) => text,
+        Err(e) => {
+            log::warn!("OCR failed for {}: {}", source_description, e);
+            String::new() // Continue without OCR text
+        }
+    };
+
+    // Encode image to Base64 PNG
+    log::info!("Encoding {} to base64...", source_description);
+    let mut image_bytes: Vec<u8> = Vec::new();
+    match image_data.write_to(&mut Cursor::new(&mut image_bytes), ImageFormat::Png) {
+        Ok(_) => {
+            let image_base64 = Some(general_purpose::STANDARD.encode(&image_bytes));
+            log::info!("{} successfully processed and encoded to base64.", source_description);
+
+            Ok(CaptureResult {
+                ocr_text,
+                image_base64,
+                temp_path: None, // No temp file for drag/drop or clipboard
+            })
+        }
+        Err(e) => {
+            log::error!("Failed to encode {} to PNG bytes for base64: {}", source_description, e);
+            Err(format!("Failed to encode image: {}", e))
+        }
+    }
+}
+
 // --- ADDED: Geocoding Function ---
 async fn geocode_location(
     client: &reqwest::Client,
@@ -1171,6 +1209,54 @@ fn cleanup_temp_screenshot(path: String) -> Result<(), String> {
             temp_path
         );
         Ok(()) // Not an error if it's already gone
+    }
+}
+
+#[tauri::command]
+async fn process_clipboard_image(app_handle: AppHandle) -> Result<CaptureResult, String> {
+    log::info!("'process_clipboard_image' command invoked");
+
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        use arboard::Clipboard;
+
+        let mut clipboard = Clipboard::new()
+            .map_err(|e| format!("Failed to access clipboard: {}", e))?;
+
+        match clipboard.get_image() {
+            Ok(image_data) => {
+                log::info!(
+                    "Image retrieved from clipboard. Width: {}, Height: {}",
+                    image_data.width,
+                    image_data.height
+                );
+
+                // Convert arboard::ImageData to image::DynamicImage
+                let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                    image_data.width as u32,
+                    image_data.height as u32,
+                    image_data.bytes.into_owned(),
+                )
+                .ok_or_else(|| "Failed to create image buffer from clipboard data".to_string())?;
+
+                let dynamic_img = DynamicImage::ImageRgba8(img);
+                let result = process_image_with_ocr(&app_handle, &dynamic_img, "clipboard image");
+                log::info!("Successfully processed clipboard image");
+                result
+            }
+            Err(e) => {
+                let err_msg = format!("No image found in clipboard: {}", e);
+                log::info!("{}", err_msg);
+                Err(err_msg)
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let err_msg = "Clipboard image processing is not supported on this platform".to_string();
+        log::error!("{}", err_msg);
+        Err(err_msg)
     }
 }
 
@@ -3849,6 +3935,7 @@ pub fn run() {
             set_selected_model,
             capture_interactive_and_ocr,
             cleanup_temp_screenshot,
+            process_clipboard_image,
             get_gemini_api_key,
             set_gemini_api_key,
             trigger_backend_window_toggle,

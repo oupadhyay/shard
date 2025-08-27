@@ -334,6 +334,7 @@ body {
 }
 
 .input-wrapper {
+    /* DO NOT ADD RELATIVE POSITIONING HERE */
     display: flex;
     align-items: flex-start; /* Align items to the top */
     flex-grow: 1; /* Allow wrapper to take available space */
@@ -976,7 +977,7 @@ body {
 
 /* ADDED: Styles for placeholder text on contenteditable div */
 #message-input.placeholder-active::before {
-    content: "Type your message..."; /* Your placeholder text */
+    content: var(--placeholder-content, "Type your message..."); /* Dynamic placeholder text */
     position: absolute;
     left: 16px; /* Should match #message-input padding-left */
     top: 14px; /* Should match #message-input padding-top */
@@ -1448,4 +1449,49 @@ body.fade-out {
 
 .image-preview-content img {
     display: block;
+}
+
+/* --- ADDED: Inline Loading Spinner Styles --- */
+.input-loading-indicator {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(var(--accent-color-rgb), 0.3);
+    border-top: 2px solid var(--accent-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    display: none;
+}
+
+.input-loading-indicator.visible {
+    display: block;
+}
+
+#message-input.loading::before {
+    color: var(--accent-color) !important;
+    animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-text {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+}
+
+@keyframes spin {
+    0% { transform: translateY(-50%) rotate(0deg); }
+    100% { transform: translateY(-50%) rotate(360deg); }
+}
+
+/* Ensure we have RGB values for the accent color */
+:root {
+    --accent-color-rgb: 59, 130, 246;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --accent-color-rgb: 37, 99, 235;
+    }
 }

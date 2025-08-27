@@ -114,7 +114,7 @@ const SYSTEM_INSTRUCTION: &str = "You are a helpful assistant that provides accu
 IMPORTANT: You have access to research tools that can help answer questions requiring current information or specialized knowledge:
 - Wikipedia Research: For factual information and background context
 - Weather Lookup: For current weather conditions
-- Financial Data: For stock market and financial information
+- Stock Price Data: For real-time stock prices and market data (ticker symbols only - NOT for valuations, GDP, economic indicators, investor sentiment, or other financial analysis)
 - ArXiv Research: For academic papers and scientific research
 
 When you need external information to properly answer a question, you can request tool usage by responding with a JSON object in this format:
@@ -638,7 +638,13 @@ async fn perform_wikipedia_lookup(
         .url()
         .to_string();
     log::info!("Performing Wikipedia lookup. Request URL: {}", request_url);
-    match client.get(base_url).query(&params).send().await {
+    match client
+        .get(base_url)
+        .query(&params)
+        .header("User-Agent", "Shard/1.0 (https://github.com/shard-app/shard)")
+        .send()
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             let response_text = response
@@ -883,13 +889,13 @@ async fn geocode_location(
     }
 }
 
-// --- ADDED: Financial Data Lookup Function ---
+// --- ADDED: Stock Price Data Lookup Function ---
 async fn perform_financial_data_lookup(
     _client: &reqwest::Client, // Not directly used by yfa, but kept for consistency if other libs need it
     symbol: &str,
 ) -> Result<String, String> {
     log::info!(
-        "Performing financial data lookup for symbol: '{}' using yahoo_finance_api",
+        "Performing stock price data lookup for symbol: '{}' using yahoo_finance_api",
         symbol
     );
 
@@ -930,20 +936,20 @@ async fn perform_financial_data_lookup(
                     quote.volume
                 );
                 log::info!(
-                    "Financial data lookup successful for symbol: '{}'. Data: {}",
+                    "Stock price data lookup successful for symbol: '{}'. Data: {}",
                     symbol,
                     formatted_data
                 );
                 Ok(formatted_data)
             } else {
-                let msg = format!("No quote data found for symbol {}.", symbol);
-                log::warn!("Financial data lookup for symbol '{}': {}", symbol, msg);
+                let msg = format!("No stock price data found for symbol {}.", symbol);
+                log::warn!("Stock price data lookup for symbol '{}': {}", symbol, msg);
                 Err(msg)
             }
         }
         Err(e) => {
             let err_msg = format!(
-                "Failed to retrieve financial data for {} from yahoo_finance_api: {}",
+                "Failed to retrieve stock price data for {} from yahoo_finance_api: {}",
                 symbol,
                 e.to_string()
             );
@@ -1310,12 +1316,11 @@ async fn send_text_to_model(
                         AVAILABLE TOOLS:\n\
                         1. WIKIPEDIA_LOOKUP: Iterative Wikipedia research for factual information, background context, and general knowledge\n\
                         2. WEATHER_LOOKUP: Current weather conditions for specific locations (use city names or zip codes)\n\
-                        3. FINANCIAL_DATA: Real-time financial market data and stock information (use stock ticker symbols like AAPL, GOOGL, TSLA)\n\
+                        3. FINANCIAL_DATA: Real-time stock prices and trading data (use stock ticker symbols like AAPL, GOOGL, TSLA) - NOT for valuations, GDP, economic indicators, investor sentiment, etc.\n\
                         4. ARXIV_LOOKUP: Academic papers and research from arXiv repository\n\n\
                         MULTI-TOOL STRATEGY GUIDELINES (REQUIRED FOR COMPLEX QUERIES):\n\
                         - Business/investment queries: Wikipedia (context) + Financial data (current metrics)\n\
                         - Technology + market queries: Wikipedia (background) + ArXiv (research) + Financial (companies)\n\
-                        - Company performance queries: Financial data (metrics) + Wikipedia (business context)\n\
                         - Travel queries: Weather (conditions) + Wikipedia (location info)\n\
                         - Research queries: Wikipedia (overview) + ArXiv (latest papers)\n\
                         - Priority 1 = most important, 5 = least important\n\n\
@@ -1930,12 +1935,13 @@ async fn send_text_to_model(
                         AVAILABLE TOOLS for follow-up:\n\
                         1. WIKIPEDIA_LOOKUP: Use GENERIC terms only (e.g., \"artificial intelligence\", not \"AI companies\")\n\
                         2. WEATHER_LOOKUP: Weather for specific cities (use city names)\n\
-                        3. FINANCIAL_DATA: Stock data (use ticker symbols like AAPL, GOOGL, TSLA)\n\
+                        3. FINANCIAL_DATA: Real-time stock prices (use ticker symbols like AAPL, GOOGL, TSLA) - NOT for valuations, GDP, or economic data\n\
                         4. ARXIV_LOOKUP: Academic papers\n\n\
                         IMPORTANT GUIDELINES:\n\
                         - For Wikipedia: Use broad, foundational terms, not specific subtopics\n\
                         - For Financial: Extract exact ticker symbols from companies mentioned in research\n\
-                        - Example: If research mentions 'IBM Corporation', use ticker 'IBM' for financial lookup\n\n\
+                        - Example: If research mentions 'IBM Corporation', use ticker 'IBM' for financial lookup\n\
+                        - For broader financial topics (valuations, GDP, economic indicators), use Wikipedia Research instead\n\n\
                         Respond with JSON:\n\
                         - If MORE tools needed: {{\"tools\": [{{\"tool_type\": \"...\", \"query\": \"...\", \"reasoning\": \"...\", \"priority\": 1}}], \"reasoning\": \"why more tools needed\"}}\n\
                         - If NO more tools needed: {{\"tools\": [], \"reasoning\": \"sufficient information gathered\"}}\n\n\

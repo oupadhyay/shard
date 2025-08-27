@@ -15,7 +15,7 @@ A Tauri application for easy interaction with AI models.
 *   System Prompt
 *   Reasoning Data for R1 & Reasoning Summaries for Gemini
 *   **MCP Tool Reasoning Integration** - AI models make smarter tool choices
-*   Financial Data from Yahoo Finance
+*   Stock Price Data from Yahoo Finance
 *   Weather Data from Open-Meteo
 *   General Data from Wikipedia
 *   Wikipedia Research Loop (up to 4 searches)

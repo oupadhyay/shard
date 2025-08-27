@@ -86,10 +86,23 @@ You have access to several powerful research and data tools. Here's how to reaso
 - When location and time-sensitive data is needed
 - For travel planning or outdoor activity decisions
 
-### When to use Financial Tools:
-- For stock prices, market data, company information
-- Economic indicators and financial analysis
-- Investment research and market trends
+### When to use Stock Price Tools:
+- For real-time stock prices and market data
+- To get current stock quotes, trading volumes, and price movements
+- When analyzing company stock performance or making investment decisions
+- ONLY when you have valid stock ticker symbols (AAPL, GOOGL, TSLA, etc.)
+
+### When NOT to use Stock Price Tools:
+- Company valuations or financial analysis beyond basic price data
+- Economic indicators (GDP, inflation, unemployment rates)
+- Market indices or sector performance
+- Investor sentiment or market analysis
+- Currency exchange rates or commodities
+- Financial news or market commentary
+- Company financial statements or earnings reports
+- Economic forecasts or predictions
+- Interest rates or bond data
+- For these topics, use Wikipedia Research instead for background information
 
 ### When to use OCR Tools:
 - To extract text from images or screenshots
@@ -106,10 +119,9 @@ You have access to several powerful research and data tools. Here's how to reaso
 
 ## Tool Combination Examples:
 
-- **Quantum Computing Query**: Wikipedia ("quantum computing") → Extract companies → Financial data (ticker symbols)
-- **AI Investment Research**: Wikipedia ("artificial intelligence") → ArXiv (latest research) → Financial data (AI company stocks)
+- **Quantum Computing Query**: Wikipedia ("quantum computing") → Extract companies → Stock price data (ticker symbols)
+- **AI Investment Research**: Wikipedia ("artificial intelligence") → ArXiv (latest research) → Stock price data (AI company stocks)
 - **Travel Planning**: Weather (current conditions) → Wikipedia (destination city name)
-- **Technology Analysis**: Wikipedia (broad technology term) → ArXiv (technical details) → Financial data (industry leaders)
 
 **Wikipedia Query Guidelines:**
 - ✅ Good: "quantum computing", "artificial intelligence", "renewable energy", "Tokyo"
@@ -201,32 +213,33 @@ Remember: Always explain your tool choices to help users understand your reasoni
 
     fn financial_guidance() -> ToolGuidance {
         ToolGuidance {
-            name: "Financial Data Lookup".to_string(),
-            description: "Retrieve stock prices, market data, and company financial information"
+            name: "Stock Price Data Lookup".to_string(),
+            description: "Retrieve real-time stock prices, trading volumes, and market data for publicly traded companies"
                 .to_string(),
             usage_pattern:
-                "Use for investment research, market analysis, and financial decision making"
+                "Use for current stock quotes, price movements, and trading data. Requires stock ticker symbols (e.g., AAPL, GOOGL, TSLA)."
                     .to_string(),
             parameters: vec![ToolParameter {
                 name: "query".to_string(),
                 param_type: "string".to_string(),
-                description: "Stock symbol, company name, or financial instrument".to_string(),
+                description: "Stock ticker symbol (e.g., AAPL, GOOGL, TSLA)".to_string(),
                 required: true,
                 default_value: None,
             }],
             examples: vec![ToolExample {
-                scenario: "User asks about a company's stock performance".to_string(),
-                reasoning: "Need current market data for informed discussion".to_string(),
+                scenario: "User asks about a company's current stock price".to_string(),
+                reasoning: "Need real-time stock price and trading data".to_string(),
                 sequence: vec![
-                    "Look up the company's stock symbol".to_string(),
-                    "Analyze current price and trends".to_string(),
-                    "Consider additional context from news or research".to_string(),
+                    "Identify the correct stock ticker symbol".to_string(),
+                    "Retrieve current price, volume, and daily trading data".to_string(),
                 ],
             }],
             reasoning_hints: vec![
-                "Critical for investment and market discussions".to_string(),
-                "Combine with other research for full context".to_string(),
-                "Consider market timing and volatility".to_string(),
+                "Essential for investment discussions and stock analysis".to_string(),
+                "Combine with Wikipedia research for company context".to_string(),
+                "Stock prices are real-time but may have market hour limitations".to_string(),
+                "DO NOT use for: valuations, GDP, economic indicators, investor sentiment, market indices, or financial analysis beyond basic price data".to_string(),
+                "Use Wikipedia Research for broader financial topics and economic concepts".to_string(),
             ],
         }
     }
@@ -388,7 +401,7 @@ Remember: Always explain your tool choices to help users understand your reasoni
                     scenario: "\"Research Tesla's AI developments and their market impact\"".to_string(),
                     reasoning: "Multi-faceted business analysis requiring company context, financial data, and technical research".to_string(),
                     sequence: vec![
-                        "Priority 1: FINANCIAL_DATA 'TSLA' → Current market performance and investor sentiment".to_string(),
+                        "Priority 1: FINANCIAL_DATA 'TSLA' → Current market performance".to_string(),
                         "Priority 2: WIKIPEDIA_LOOKUP 'Tesla Inc' → Company background and business context".to_string(),
                         "Priority 3: ARXIV_LOOKUP 'Tesla autonomous driving AI' → Latest technical developments".to_string(),
                         "Priority 4: WIKIPEDIA_LOOKUP 'Tesla Autopilot' → Product development history".to_string(),
@@ -412,7 +425,7 @@ Remember: Always explain your tool choices to help users understand your reasoni
                         "Priority 1: WIKIPEDIA_LOOKUP 'quantum computing' → Foundational concepts and history".to_string(),
                         "Priority 2: ARXIV_LOOKUP 'quantum computing breakthroughs' → Recent scientific advances".to_string(),
                         "Priority 3: FINANCIAL_DATA 'IBM' → Major quantum computing company performance".to_string(),
-                        "Priority 4: FINANCIAL_DATA 'GOOGL' → Google's quantum computing investments".to_string(),
+                        "Priority 4: WIKIPEDIA_LOOKUP 'Google Quantum' → Google's quantum computing investments".to_string(),
                         "Analysis: Technical feasibility, commercial viability, and investment landscape".to_string(),
                     ],
                 },
@@ -422,7 +435,7 @@ Remember: Always explain your tool choices to help users understand your reasoni
                     sequence: vec![
                         "Priority 1: WIKIPEDIA_LOOKUP 'renewable energy' → Overview of technologies and policies".to_string(),
                         "Priority 2: ARXIV_LOOKUP 'renewable energy efficiency' → Latest technological advances".to_string(),
-                        "Priority 3: FINANCIAL_DATA 'ENPH' → Solar industry financial health".to_string(),
+                        "Priority 3: FINANCIAL_DATA 'ENPH' → Solar industry leader financial health".to_string(),
                         "Priority 4: WIKIPEDIA_LOOKUP 'renewable energy policy' → Government initiatives and regulations".to_string(),
                         "Synthesis: Technology capabilities, market dynamics, and policy framework".to_string(),
                     ],
@@ -430,8 +443,8 @@ Remember: Always explain your tool choices to help users understand your reasoni
             ],
             reasoning_hints: vec![
                 "FOUNDATIONAL FIRST: Start with Wikipedia for broad context before diving into specifics".to_string(),
-                "TOOL COMPLEMENTARITY: Use each tool's unique strengths - Wikipedia for context, ArXiv for cutting-edge research, Financial for market data".to_string(),
-                "PRIORITY SEQUENCING: Execute high-priority, time-sensitive tools (Weather, Financial) before background research".to_string(),
+                "TOOL COMPLEMENTARITY: Use each tool's unique strengths - Wikipedia for context, ArXiv for cutting-edge research, Financial for stock data".to_string(),
+                "PRIORITY SEQUENCING: Execute detailed, niche tools (Weather, Financial) after background research".to_string(),
                 "ADAPTIVE STRATEGY: Adjust subsequent tool selections based on findings from earlier tools".to_string(),
                 "INFORMATION TRIANGULATION: Cross-reference information across multiple sources for accuracy".to_string(),
                 "CONTEXT PRESERVATION: Maintain awareness of how each tool's results inform the others".to_string(),
@@ -507,10 +520,11 @@ This approach ensures users understand your research process and can trust your 
         capabilities.insert(
             "financial_data".to_string(),
             json!({
-                "description": "Stock prices, market data, company information",
-                "best_for": ["investment research", "market analysis", "company evaluation"],
-                "strengths": ["real-time data", "comprehensive metrics", "historical context"],
-                "limitations": ["market hours dependent", "financial focus only"]
+                "description": "Real-time stock prices and trading data for publicly traded companies",
+                "best_for": ["stock quotes", "price movements", "trading volume", "market data"],
+                "strengths": ["real-time data", "accurate pricing", "comprehensive trading info"],
+                "limitations": ["requires valid ticker symbols", "public companies only", "market hours dependent"],
+                "do_not_use_for": ["company valuations", "GDP data", "economic indicators", "investor sentiment", "market indices", "currency exchange rates", "commodities", "financial news", "earnings reports", "economic forecasts", "interest rates", "bond data"]
             }),
         );
 

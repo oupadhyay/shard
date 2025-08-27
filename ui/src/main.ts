@@ -76,6 +76,7 @@ const modelMap: { [key: string]: string } = {
   // "Deepseek R1 (free)": "deepseek/deepseek-r1:free",
   "Deepseek R1 (05-28)": "deepseek/deepseek-r1-0528:free",
   "Deepseek V3 (03-24)": "deepseek/deepseek-chat-v3-0324:free",
+  "GPT OSS 20B (free)": "openrouter.ai/openai/gpt-oss-20b:free",
   "Gemini 2.0 Flash": "gemini-2.0-flash",
   "Gemini 2.5 Flash (05-20)": "gemini-2.5-flash-preview-05-20",
   "Gemini 2.5 Flash (Thinking)": "gemini-2.5-flash-preview-05-20#thinking-enabled",
